@@ -1,0 +1,13 @@
+[project]
+name = "bayessplatting"
+version = "0.1"
+
+dependencies = [
+    "nerfstudio==1.1.0"
+]
+
+[tool.setuptools.packages.find]
+include = ["bayessplatting*"]
+
+[project.scripts]
+ns-uncertainty = "bayessplatting.scripts.uncertainty:entrypoint"
