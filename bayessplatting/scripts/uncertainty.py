@@ -2,8 +2,11 @@ import time
 from pathlib import Path
 
 import pkg_resources
+import torch
 import tyro
 from dataclasses import dataclass
+
+from nerfstudio.field_components.encodings import HashEncoding
 from nerfstudio.utils.eval_utils import eval_setup
 
 
@@ -32,6 +35,35 @@ class ComputeUncertainty:
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
         start_time = time.time()
+
+        self.device = pipeline.device
+        self.aabb = pipeline.model.scene_box.aabb.to(self.device)
+        self.hessian = torch.zeros(((2 ** self.lod) + 1) ** 3).to(self.device)
+        self.deform_field = HashEncoding(num_levels=1,
+                                         min_res=2 ** self.lod,
+                                         max_res=2 ** self.lod,
+                                         log2_hashmap_size=self.lod * 3 + 1,
+                                         # simple regular grid (hash table size > grid size)
+                                         features_per_level=3,
+                                         hash_init_scale=0.,
+                                         implementation="torch",
+                                         interpolation="Linear")
+        self.deform_field.to(self.device)
+        self.deform_field.scalings = torch.tensor([2 ** self.lod]).to(self.device)
+
+        pipeline.eval()
+        len_train = max(pipeline.datamanager.train_dataset.__len__(), self.iters)
+        for step in range(len_train):
+            print("step", step)
+            ray_bundle, batch = pipeline.datamanager.next_train(step)
+            output_fn = self.get_output_fn(pipeline.model)
+            outputs, points, offsets, = output_fn(ray_bundle, pipeline.model)
+            hessian = self.find_uncertainty(points_fine, offsets_fine, outputs['rgb_fine'],
+                                            pipeline.model.field.spatial_distortion)
+            self.hessian += hessian.clone().detach()
+            hessian = self.find_uncertainty(points_coarse, offsets_coarse, outputs['rgb_coarse'],
+                                            pipeline.model.field.spatial_distortion)
+            self.hessian += hessian.clone().detach()
 
         end_time = time.time()
         print("Done")
