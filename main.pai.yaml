@@ -1,7 +1,6 @@
 protocolVersion: 2
 name: nerfstudio
 type: job
-jobRetryCount: 0
 prerequisites:
   - type: dockerimage
     uri: >-
@@ -36,9 +35,16 @@ taskRoles:
         values:
           - '0'
     commands:
+      - pwd 
+      - cat ~/.bashrc
+      - export PATH="/usr/local/cuda-11.8/bin:$PATH" >> ~/.bashrc
+      - export LD_LIBRARY_PATH="/usr/local/cuda-11.8/lib64:$LD_LIBRARY_PATH" >> ~/.bashrc
+      - source .bashrc
+      - cat ~/.bashrc
+      - cd ../../mnt/scratch/${PAI_JOB_NAME}
+      - pwd
       - sleep infinity
-defaults:
-  virtualCluster: default
+
 extras:
   com.microsoft.pai.runtimeplugin:
     - plugin: ssh
