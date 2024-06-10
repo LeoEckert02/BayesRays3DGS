@@ -14,33 +14,7 @@ from nerfstudio.field_components.encodings import HashEncoding
 from nerfstudio.model_components import renderers
 from nerfstudio.utils.eval_utils import eval_setup
 from torch import Tensor
-
-
-def get_normalized_positions(box: OrientedBox, positions: Float[Tensor, "n 3"]):
-    """Return normalized positions in range [0, 1] based on the OrientedBox.
-
-    Args:
-        :param positions: the xyz positions
-        :param box: the box of the scene
-    """
-    # Transform positions to the OrientedBox coordinate system
-    r, t, s = box.R, box.T, box.S.to(positions)
-    h = torch.eye(4, device=positions.device, dtype=positions.dtype)
-    h[:3, :3] = r
-    h[:3, 3] = t
-    h_world2bbox = torch.inverse(h)
-    positions = torch.cat((positions, torch.ones_like(positions[..., :1])), dim=-1)
-    positions = torch.matmul(h_world2bbox, positions.T).T[..., :3]
-
-    # Normalize positions within the OrientedBox
-    # lower bound
-    comp_l = torch.tensor(-s / 2)
-    # upper bound
-    comp_m = torch.tensor(s / 2)
-    aabb_lengths = comp_m - comp_l
-    normalized_positions = (positions - comp_l) / aabb_lengths
-    return normalized_positions
-
+import pbd
 
 @dataclass
 class ComputeUncertainty:
@@ -54,6 +28,56 @@ class ComputeUncertainty:
     lod: int = 8
     # number of iterations on the trainset
     iters: int = 1000
+
+    def find_uncertainty(self, points, deform_points, rgb):
+        inds, coeffs = find_grid_indices(points, self.aabb, distortion, self.lod, self.device)
+        # because deformation params are detached for each point on each ray from the grid, summation does not affect derivative
+        colors = torch.sum(rgb, dim=0)
+        colors[0].backward(retain_graph=True)
+        r = deform_points.grad.clone().detach().view(-1, 3)
+        deform_points.grad.zero_()
+        colors[1].backward(retain_graph=True)
+        g = deform_points.grad.clone().detach().view(-1, 3)
+        deform_points.grad.zero_()
+        colors[2].backward()
+        b = deform_points.grad.clone().detach().view(-1, 3)
+        deform_points.grad.zero_()
+        dmy = (torch.arange(points.shape[0])[..., None]).repeat((1, points.shape[1])).flatten().to(self.device)
+        first = True
+        for corner in range(8):
+            if first:
+                all_ind = torch.cat((dmy.unsqueeze(-1), inds[corner].unsqueeze(-1)), dim=-1)
+                all_r = coeffs[corner].unsqueeze(-1) * r
+                all_g = coeffs[corner].unsqueeze(-1) * g
+                all_b = coeffs[corner].unsqueeze(-1) * b
+                first = False
+            else:
+                all_ind = torch.cat((all_ind, torch.cat((dmy.unsqueeze(-1), inds[corner].unsqueeze(-1)), dim=-1)),
+                                    dim=0)
+            all_r = torch.cat((all_r, coeffs[corner].unsqueeze(-1) * r), dim=0)
+            all_g = torch.cat((all_g, coeffs[corner].unsqueeze(-1) * g), dim=0)
+            all_b = torch.cat((all_b, coeffs[corner].unsqueeze(-1) * b), dim=0)
+
+        keys_all, inds_all = torch.unique(all_ind, dim=0, return_inverse=True)
+        grad_r_1 = torch.bincount(inds_all, weights=all_r[..., 0])  # for first element of deformation field
+        grad_g_1 = torch.bincount(inds_all, weights=all_g[..., 0])
+        grad_b_1 = torch.bincount(inds_all, weights=all_b[..., 0])
+        grad_r_2 = torch.bincount(inds_all, weights=all_r[..., 1])  # for second element of deformation field
+        grad_g_2 = torch.bincount(inds_all, weights=all_g[..., 1])
+        grad_b_2 = torch.bincount(inds_all, weights=all_b[..., 1])
+        grad_r_3 = torch.bincount(inds_all, weights=all_r[..., 2])  # for third element of deformation field
+        grad_g_3 = torch.bincount(inds_all, weights=all_g[..., 2])
+        grad_b_3 = torch.bincount(inds_all, weights=all_b[..., 2])
+        grad_1 = grad_r_1 ** 2 + grad_g_1 ** 2 + grad_b_1 ** 2
+        grad_2 = grad_r_2 ** 2 + grad_g_2 ** 2 + grad_b_2 ** 2
+        grad_3 = grad_r_3 ** 2 + grad_g_3 ** 2 + grad_b_3 ** 2  # will consider the trace of each submatrix for each deformation
+        # vector as indicator of hessian wrt the whole vector
+
+        grads_all = torch.cat((keys_all[:, 1].unsqueeze(-1), (grad_1 + grad_2 + grad_3).unsqueeze(-1)), dim=-1)
+        hessian = torch.zeros(((2 ** self.lod) + 1) ** 3).to(self.device)
+        hessian = hessian.put((grads_all[:, 0]).long(), grads_all[:, 1], True)
+
+        return hessian
 
     def main(self) -> None:
         """Main function."""
@@ -87,13 +111,11 @@ class ComputeUncertainty:
         for step in range(len_train):
             print("step", step)
             camera, _ = pipeline.datamanager.next_train(step)
+            breakpoint()
             outputs, points, offsets = self.get_outputs(camera, pipeline.model)
-            # hessian = self.find_uncertainty(points_fine, offsets_fine, outputs['rgb_fine'],
-            #                                 pipeline.model.field.spatial_distortion)
-            # self.hessian += hessian.clone().detach()
-            # hessian = self.find_uncertainty(points_coarse, offsets_coarse, outputs['rgb_coarse'],
-            #                                 pipeline.model.field.spatial_distortion)
-            # self.hessian += hessian.clone().detach()
+            hessian = self.find_uncertainty(points, offsets, outputs['rgb'],
+                                            pipeline.model.field.spatial_distortion)
+            self.hessian += hessian.clone().detach()
 
         end_time = time.time()
         print("Done")
@@ -103,6 +125,7 @@ class ComputeUncertainty:
         print(f"Execution time: {execution_time:.6f} seconds")
 
     def get_outputs(self, camera: Cameras, model):
+        """Reimplementation of the get_ouptut mehtosd to add offsets and points"""
         if not isinstance(camera, Cameras):
             print("Called get_outputs with not a camera")
             return {}
@@ -169,6 +192,12 @@ class ComputeUncertainty:
             features_rest_crop = model.features_rest
             scales_crop = model.scales
             quats_crop = model.quats
+
+        breakpoint()
+        # get the offsets from the deform field
+        normalized_points = get_normalized_positions(model.scene_box, means_crop)
+        offsets = self.deform_field(normalized_points).clone().detach()
+        offsets.requires_grad = True
 
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
         BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
@@ -252,7 +281,7 @@ class ComputeUncertainty:
         }
 
         # means_crop are xyz points of gaussian splat
-        return outputs, means_crop
+        return outputs, means_crop, offsets
 
     def get_downscale_factor(self, model):
         if model.training:
