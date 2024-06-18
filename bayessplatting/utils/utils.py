@@ -4,7 +4,7 @@ from nerfstudio.data.scene_box import OrientedBox
 from torch import Tensor
 
 
-def find_grid_indices(points, box: OrientedBox, lod, device, zero_out=True):
+def find_grid_indices(points, box: OrientedBox, lod, device):
     pos = get_normalized_positions(box, points)
     pos = pos.view(-1, 3)
     uncertainty_lod = 2 ** lod
@@ -28,6 +28,7 @@ def find_grid_indices(points, box: OrientedBox, lod, device, zero_out=True):
         coords[..., 2] - (torch.floor(coords[..., 2]) + (1 - corners[:, :, 3])))
 
     return inds, coefs
+
 
 def get_normalized_positions(box: OrientedBox, positions: Float[Tensor, "n 3"]):
     """Return normalized positions in range [0, 1] based on the OrientedBox.

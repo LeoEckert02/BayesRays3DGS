@@ -7,14 +7,13 @@ import tyro
 from dataclasses import dataclass
 
 from gsplat import spherical_harmonics
-from jaxtyping import Float
 from nerfstudio.cameras.cameras import Cameras
-from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.field_components.encodings import HashEncoding
 from nerfstudio.model_components import renderers
 from nerfstudio.utils.eval_utils import eval_setup
-from torch import Tensor
-import pbd
+
+from bayessplatting.utils.utils import find_grid_indices, get_normalized_positions
+
 
 @dataclass
 class ComputeUncertainty:
@@ -30,7 +29,7 @@ class ComputeUncertainty:
     iters: int = 1000
 
     def find_uncertainty(self, points, deform_points, rgb):
-        inds, coeffs = find_grid_indices(points, self.aabb, distortion, self.lod, self.device)
+        inds, coeffs = find_grid_indices(points, self.oob, self.lod, self.device)
         # because deformation params are detached for each point on each ray from the grid, summation does not affect derivative
         colors = torch.sum(rgb, dim=0)
         colors[0].backward(retain_graph=True)
@@ -92,7 +91,7 @@ class ComputeUncertainty:
         start_time = time.time()
 
         self.device = pipeline.device
-        self.aabb = pipeline.model.scene_box.aabb.to(self.device)
+        self.oob = pipeline.model.crop_box.to(self.device)
         self.hessian = torch.zeros(((2 ** self.lod) + 1) ** 3).to(self.device)
         self.deform_field = HashEncoding(num_levels=1,
                                          min_res=2 ** self.lod,
@@ -113,8 +112,7 @@ class ComputeUncertainty:
             camera, _ = pipeline.datamanager.next_train(step)
             breakpoint()
             outputs, points, offsets = self.get_outputs(camera, pipeline.model)
-            hessian = self.find_uncertainty(points, offsets, outputs['rgb'],
-                                            pipeline.model.field.spatial_distortion)
+            hessian = self.find_uncertainty(points, offsets, outputs['rgb'])
             self.hessian += hessian.clone().detach()
 
         end_time = time.time()
