@@ -5,6 +5,7 @@ import pkg_resources
 import torch
 import tyro
 from dataclasses import dataclass
+import numpy as np
 
 from gsplat import spherical_harmonics
 from nerfstudio.cameras.cameras import Cameras
@@ -32,19 +33,25 @@ class ComputeUncertainty:
 
     def find_uncertainty(self, points, deform_points, rgb):
         inds, coeffs = find_grid_indices(points, self.aabb, self.lod, self.device)
-        breakpoint()
+        # breakpoint()
         # because deformation params are detached for each point on each ray from the grid, summation does not affect derivative
         colors = torch.sum(rgb, dim=0)
         colors[0].backward(retain_graph=True)
         r = deform_points.grad.clone().detach().view(-1, 3)
+        print("Offset of the points (deform_points):", deform_points)
+
         deform_points.grad.zero_()
         colors[1].backward(retain_graph=True)
         g = deform_points.grad.clone().detach().view(-1, 3)
+        print("Gradient after first backward pass (g):", g)
+
         deform_points.grad.zero_()
         colors[2].backward()
         b = deform_points.grad.clone().detach().view(-1, 3)
+        print("Gradient after third backward pass (b):", b)
+
         deform_points.grad.zero_()
-        dmy = (torch.arange(points.shape[0])[..., None]).repeat((1, points.shape[1])).flatten().to(self.device)
+        dmy = torch.arange(inds.shape[1], device=self.device)
         first = True
         for corner in range(8):
             if first:
@@ -54,11 +61,10 @@ class ComputeUncertainty:
                 all_b = coeffs[corner].unsqueeze(-1) * b
                 first = False
             else:
-                all_ind = torch.cat((all_ind, torch.cat((dmy.unsqueeze(-1), inds[corner].unsqueeze(-1)), dim=-1)),
-                                    dim=0)
-            all_r = torch.cat((all_r, coeffs[corner].unsqueeze(-1) * r), dim=0)
-            all_g = torch.cat((all_g, coeffs[corner].unsqueeze(-1) * g), dim=0)
-            all_b = torch.cat((all_b, coeffs[corner].unsqueeze(-1) * b), dim=0)
+                all_ind = torch.cat((all_ind, torch.cat((dmy.unsqueeze(-1), inds[corner].unsqueeze(-1)), dim=-1)),dim=0)
+                all_r = torch.cat((all_r, coeffs[corner].unsqueeze(-1) * r), dim=0)
+                all_g = torch.cat((all_g, coeffs[corner].unsqueeze(-1) * g), dim=0)
+                all_b = torch.cat((all_b, coeffs[corner].unsqueeze(-1) * b), dim=0)
 
         keys_all, inds_all = torch.unique(all_ind, dim=0, return_inverse=True)
         grad_r_1 = torch.bincount(inds_all, weights=all_r[..., 0])  # for first element of deformation field
@@ -76,8 +82,12 @@ class ComputeUncertainty:
         # vector as indicator of hessian wrt the whole vector
 
         grads_all = torch.cat((keys_all[:, 1].unsqueeze(-1), (grad_1 + grad_2 + grad_3).unsqueeze(-1)), dim=-1)
+        print("Gradients for each deformation component combined (grads_all):", grads_all)
+
         hessian = torch.zeros(((2 ** self.lod) + 1) ** 3).to(self.device)
         hessian = hessian.put((grads_all[:, 0]).long(), grads_all[:, 1], True)
+        print("Hessian:", hessian)
+
 
         return hessian
 
@@ -108,24 +118,25 @@ class ComputeUncertainty:
         self.deform_field.to(self.device)
         self.deform_field.scalings = torch.tensor([2 ** self.lod]).to(self.device)
 
-        breakpoint()
+        # breakpoint()
 
         pipeline.eval()
         len_train = max(pipeline.datamanager.train_dataset.__len__(), self.iters)
         for step in range(len_train):
             print("step", step)
             camera, _ = pipeline.datamanager.next_train(step)
-            breakpoint()
+            # breakpoint()
             outputs, points, offsets = self.get_outputs(camera, pipeline.model)
-            breakpoint()
-            hessian = self.find_uncertainty(points, offsets, outputs['rgb'])
+            # breakpoint()
+            hessian = self.find_uncertainty(points, offsets, outputs['rgb'].view(-1, 3))
             self.hessian += hessian.clone().detach()
 
         end_time = time.time()
         print("Done")
-        # with open(str(self.output_path), 'wb') as f:
-        #     np.save(f, self.hessian.cpu().numpy())
+        with open(str(self.output_path), 'wb') as f:
+            np.save(f, self.hessian.cpu().numpy())
         execution_time = end_time - start_time
+        breakpoint()
         print(f"Execution time: {execution_time:.6f} seconds")
 
     def get_outputs(self, camera: Cameras, model):
@@ -197,12 +208,14 @@ class ComputeUncertainty:
             scales_crop = model.scales
             quats_crop = model.quats
 
-        breakpoint()
+        # breakpoint()
         # get the offsets from the deform field
         normalized_points, _ = normalize_point_coords(means_crop, self.aabb)
         offsets = self.deform_field(normalized_points).clone().detach()
-        breakpoint()
         offsets.requires_grad = True
+        # breakpoint()
+
+        means_crop = means_crop + offsets
 
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
         BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
