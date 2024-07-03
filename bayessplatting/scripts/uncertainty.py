@@ -1,21 +1,22 @@
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pkg_resources
 import torch
 import tyro
-from dataclasses import dataclass
-import numpy as np
-
-from gsplat import spherical_harmonics
 from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.field_components.encodings import HashEncoding
-from nerfstudio.model_components import renderers
 from nerfstudio.utils.eval_utils import eval_setup
+from nerfstudio.utils.misc import torch_compile
+
+try:
+    from gsplat.rendering import rasterization
+except ImportError:
+    print("Please install gsplat>=1.0.0")
 
 from bayessplatting.utils.utils import find_grid_indices, normalize_point_coords
-from gsplat.project_gaussians import project_gaussians
-from gsplat.rasterize import rasterize_gaussians
 
 
 @dataclass
@@ -61,7 +62,8 @@ class ComputeUncertainty:
                 all_b = coeffs[corner].unsqueeze(-1) * b
                 first = False
             else:
-                all_ind = torch.cat((all_ind, torch.cat((dmy.unsqueeze(-1), inds[corner].unsqueeze(-1)), dim=-1)),dim=0)
+                all_ind = torch.cat((all_ind, torch.cat((dmy.unsqueeze(-1), inds[corner].unsqueeze(-1)), dim=-1)),
+                                    dim=0)
                 all_r = torch.cat((all_r, coeffs[corner].unsqueeze(-1) * r), dim=0)
                 all_g = torch.cat((all_g, coeffs[corner].unsqueeze(-1) * g), dim=0)
                 all_b = torch.cat((all_b, coeffs[corner].unsqueeze(-1) * b), dim=0)
@@ -87,7 +89,6 @@ class ComputeUncertainty:
         hessian = torch.zeros(((2 ** self.lod) + 1) ** 3).to(self.device)
         hessian = hessian.put((grads_all[:, 0]).long(), grads_all[:, 1], True)
         print("Hessian:", hessian)
-
 
         return hessian
 
@@ -140,58 +141,26 @@ class ComputeUncertainty:
         print(f"Execution time: {execution_time:.6f} seconds")
 
     def get_outputs(self, camera: Cameras, model):
-        """Reimplementation of the get_ouptut mehtosd to add offsets and points"""
+        """Reimplementation of the get_outputs method to add offsets and points"""
         if not isinstance(camera, Cameras):
             print("Called get_outputs with not a camera")
             return {}
-        assert camera.shape[0] == 1, "Only one camera at a time"
 
-        # get the background color
         if model.training:
-            optimized_camera_to_world = model.camera_optimizer.apply_to_camera(camera)[0, ...]
-
-            if model.config.background_color == "random":
-                background = torch.rand(3, device=self.device)
-            elif model.config.background_color == "white":
-                background = torch.ones(3, device=self.device)
-            elif model.config.background_color == "black":
-                background = torch.zeros(3, device=self.device)
-            else:
-                background = model.background_color.to(self.device)
+            assert camera.shape[0] == 1, "Only one camera at a time"
+            optimized_camera_to_world = model.camera_optimizer.apply_to_camera(camera)
         else:
-            optimized_camera_to_world = camera.camera_to_worlds[0, ...]
+            optimized_camera_to_world = camera.camera_to_worlds
 
-            if renderers.BACKGROUND_COLOR_OVERRIDE is not None:
-                background = renderers.BACKGROUND_COLOR_OVERRIDE.to(self.device)
-            else:
-                background = model.background_color.to(self.device)
-
+        # cropping
         if model.crop_box is not None and not model.training:
             crop_ids = model.crop_box.within(model.means).squeeze()
             if crop_ids.sum() == 0:
-                return model.get_empty_outputs(int(camera.width.item()), int(camera.height.item()), background)
+                return model.get_empty_outputs(
+                    int(camera.width.item()), int(camera.height.item()), model.background_color
+                )
         else:
             crop_ids = None
-        camera_downscale = self.get_downscale_factor(model)
-        camera.rescale_output_resolution(1 / camera_downscale)
-        # shift the camera to center of scene looking at center
-        R = optimized_camera_to_world[:3, :3]  # 3 x 3
-        T = optimized_camera_to_world[:3, 3:4]  # 3 x 1
-
-        # flip the z and y axes to align with gsplat conventions
-        R_edit = torch.diag(torch.tensor([1, -1, -1], device=self.device, dtype=R.dtype))
-        R = R @ R_edit
-        # analytic matrix inverse to get world2camera matrix
-        R_inv = R.T
-        T_inv = -R_inv @ T
-        viewmat = torch.eye(4, device=R.device, dtype=R.dtype)
-        viewmat[:3, :3] = R_inv
-        viewmat[:3, 3:4] = T_inv
-        # calculate the FOV of the camera given fx and fy, width and height
-        cx = camera.cx.item()
-        cy = camera.cy.item()
-        W, H = int(camera.width.item()), int(camera.height.item())
-        self.last_size = (H, W)
 
         if crop_ids is not None:
             opacities_crop = model.opacities[crop_ids]
@@ -218,78 +187,71 @@ class ComputeUncertainty:
         means_crop = means_crop + offsets
 
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
+
         BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
-        model.xys, depths, model.radii, conics, comp, num_tiles_hit, cov3d = project_gaussians(  # type: ignore
-            means_crop,
-            torch.exp(scales_crop),
-            1,
-            quats_crop / quats_crop.norm(dim=-1, keepdim=True),
-            viewmat.squeeze()[:3, :],
-            camera.fx.item(),
-            camera.fy.item(),
-            cx,
-            cy,
-            H,
-            W,
-            BLOCK_WIDTH,
-        )  # type: ignore
-
-        # rescale the camera back to original dimensions before returning
-        camera.rescale_output_resolution(camera_downscale)
-
-        if (model.radii).sum() == 0:
-            return model.get_empty_outputs(W, H, background)
-
-        if model.config.sh_degree > 0:
-            viewdirs = means_crop.detach() - optimized_camera_to_world.detach()[:3, 3]  # (N, 3)
-            n = min(model.step // model.config.sh_degree_interval, model.config.sh_degree)
-            rgbs = spherical_harmonics(n, viewdirs, colors_crop)  # input unnormalized viewdirs
-            rgbs = torch.clamp(rgbs + 0.5, min=0.0)  # type: ignore
-        else:
-            rgbs = torch.sigmoid(colors_crop[:, 0, :])
-
-        assert (num_tiles_hit > 0).any()  # type: ignore
+        camera_scale_fac = model._get_downscale_factor()
+        camera.rescale_output_resolution(1 / camera_scale_fac)
+        viewmat = self.get_viewmat(optimized_camera_to_world)
+        K = camera.get_intrinsics_matrices().cuda()
+        W, H = int(camera.width.item()), int(camera.height.item())
+        model.last_size = (H, W)
+        camera.rescale_output_resolution(camera_scale_fac)  # type: ignore
 
         # apply the compensation of screen space blurring to gaussians
-        if model.config.rasterize_mode == "antialiased":
-            opacities = torch.sigmoid(opacities_crop) * comp[:, None]
-        elif model.config.rasterize_mode == "classic":
-            opacities = torch.sigmoid(opacities_crop)
-        else:
+        if model.config.rasterize_mode not in ["antialiased", "classic"]:
             raise ValueError("Unknown rasterize_mode: %s", model.config.rasterize_mode)
 
-        rgb, alpha = rasterize_gaussians(  # type: ignore
-            model.xys,
-            depths,
-            model.radii,
-            conics,
-            num_tiles_hit,  # type: ignore
-            rgbs,
-            opacities,
-            H,
-            W,
-            BLOCK_WIDTH,
-            background=background,
-            return_alpha=True,
-        )  # type: ignore
-        alpha = alpha[..., None]
-        rgb = torch.clamp(rgb, max=1.0)  # type: ignore
-        depth_im = None
         if model.config.output_depth_during_training or not model.training:
-            depth_im = rasterize_gaussians(  # type: ignore
-                model.xys,
-                depths,
-                model.radii,
-                conics,
-                num_tiles_hit,  # type: ignore
-                depths[:, None].repeat(1, 3),
-                opacities,
-                H,
-                W,
-                BLOCK_WIDTH,
-                background=torch.zeros(3, device=self.device),
-            )[..., 0:1]  # type: ignore
-            depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
+            render_mode = "RGB+ED"
+        else:
+            render_mode = "RGB"
+
+        if model.config.sh_degree > 0:
+            sh_degree_to_use = min(model.step // model.config.sh_degree_interval, model.config.sh_degree)
+        else:
+            colors_crop = torch.sigmoid(colors_crop)
+            sh_degree_to_use = None
+
+        render, alpha, info = rasterization(
+            means=means_crop,
+            quats=quats_crop / quats_crop.norm(dim=-1, keepdim=True),
+            scales=torch.exp(scales_crop),
+            opacities=torch.sigmoid(opacities_crop).squeeze(-1),
+            colors=colors_crop,
+            viewmats=viewmat,  # [1, 4, 4]
+            Ks=K,  # [1, 3, 3]
+            width=W,
+            height=H,
+            tile_size=BLOCK_WIDTH,
+            packed=False,
+            near_plane=0.01,
+            far_plane=1e10,
+            render_mode=render_mode,
+            sh_degree=sh_degree_to_use,
+            sparse_grad=False,
+            absgrad=True,
+            rasterize_mode=model.config.rasterize_mode,
+            # set some threshold to disregrad small gaussians for faster rendering.
+            # radius_clip=3.0,
+        )
+        if model.training and info["means2d"].requires_grad:
+            info["means2d"].retain_grad()
+        model.xys = info["means2d"]  # [1, N, 2]
+        model.radii = info["radii"][0]  # [N]
+        alpha = alpha[:, ...]
+
+        background = model.background_color.to(self.device)
+        rgb = render[:, ..., :3] + (1 - alpha) * background
+        rgb = torch.clamp(rgb, 0.0, 1.0)
+
+        if render_mode == "RGB+ED":
+            depth_im = render[:, ..., 3:4]
+            depth_im = torch.where(alpha > 0, depth_im, depth_im.detach().max()).squeeze(0)
+        else:
+            depth_im = None
+
+        if background.shape[0] == 3 and not model.training:
+            background = background.expand(H, W, 3)
 
         outputs = {
             "rgb": rgb,
@@ -300,6 +262,24 @@ class ComputeUncertainty:
 
         # means_crop are xyz points of gaussian splat
         return outputs, means_crop, offsets
+
+    @torch_compile()
+    def get_viewmat(optimized_camera_to_world):
+        """
+        function that converts c2w to gsplat world2camera matrix, using compile for some speed
+        """
+        R = optimized_camera_to_world[:, :3, :3]  # 3 x 3
+        T = optimized_camera_to_world[:, :3, 3:4]  # 3 x 1
+        # flip the z and y axes to align with gsplat conventions
+        R = R * torch.tensor([[[1, -1, -1]]], device=R.device, dtype=R.dtype)
+        # analytic matrix inverse to get world2camera matrix
+        R_inv = R.transpose(1, 2)
+        T_inv = -torch.bmm(R_inv, T)
+        viewmat = torch.zeros(R.shape[0], 4, 4, device=R.device, dtype=R.dtype)
+        viewmat[:, 3, 3] = 1.0  # homogenous
+        viewmat[:, :3, :3] = R_inv
+        viewmat[:, :3, 3:4] = T_inv
+        return viewmat
 
     def get_downscale_factor(self, model):
         if model.training:
