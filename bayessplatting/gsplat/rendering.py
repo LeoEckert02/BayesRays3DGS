@@ -19,6 +19,7 @@ def rasterization(
     quats: Tensor,  # [N, 4]
     scales: Tensor,  # [N, 3]
     opacities: Tensor,  # [N]
+    uncertainties: Tensor, # [N]
     colors: Tensor,  # [(C,) N, D] or [(C,) N, K, 3]
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
@@ -32,12 +33,12 @@ def rasterization(
     packed: bool = True,
     tile_size: int = 16,
     backgrounds: Optional[Tensor] = None,
-    render_mode: Literal["RGB", "D", "ED", "RGB+D", "RGB+ED"] = "RGB",
+    render_mode: Literal["RGB", "D", "ED", "U", "RGB+D", "RGB+ED", "RGB+U"] = "RGB",
     sparse_grad: bool = False,
     absgrad: bool = False,
     rasterize_mode: Literal["classic", "antialiased"] = "classic",
     channel_chunk: int = 32,
-) -> Tuple[Tensor, Tensor, Dict]:
+) -> Tuple[Tensor, Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
     This function provides a handful features for 3D Gaussian rasterization, which
@@ -171,14 +172,15 @@ def rasterization(
         >>> scales = torch.rand((100, 3), device=device) * 0.1
         >>> colors = torch.rand((100, 3), device=device)
         >>> opacities = torch.rand((100,), device=device)
+        >>> uncertainties = torch.rand((100,), device=device)
         >>> # define cameras
         >>> viewmats = torch.eye(4, device=device)[None, :, :]
         >>> Ks = torch.tensor([
         >>>    [300., 0., 150.], [0., 300., 100.], [0., 0., 1.]], device=device)[None, :, :]
         >>> width, height = 300, 200
         >>> # render
-        >>> colors, alphas, meta = rasterization(
-        >>>    means, quats, scales, opacities, colors, viewmats, Ks, width, height
+        >>> colors, alphas, uncertainties, meta = rasterization(
+        >>>    means, quats, scales, opacities, uncertainties, colors, viewmats, Ks, width, height
         >>> )
         >>> print (colors.shape, alphas.shape)
         torch.Size([1, 200, 300, 3]) torch.Size([1, 200, 300, 1])
@@ -195,9 +197,10 @@ def rasterization(
     assert quats.shape == (N, 4), quats.shape
     assert scales.shape == (N, 3), scales.shape
     assert opacities.shape == (N,), opacities.shape
+    assert uncertainties.shape == (N,), uncertainties.shape
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
-    assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    assert render_mode in ["RGB", "D", "ED", "U", "RGB+D", "RGB+ED", "RGB+U"], render_mode
 
     if sh_degree is None:
         # treat colors as post-activation values, should be in shape [N, D] or [C, N, D]
@@ -245,10 +248,12 @@ def rasterization(
             compensations,
         ) = proj_results
         opacities = opacities[gaussian_ids]  # [nnz]
+        uncertainties = uncertainties[gaussian_ids]  # [nnz]
     else:
         # The results are with shape [C, N, ...]. Only the elements with radii > 0 are valid.
         radii, means2d, depths, conics, compensations = proj_results
         opacities = opacities.repeat(C, 1)  # [C, N]
+        uncertainties = uncertainties.repeat(C, 1)  # [C, N]
         camera_ids, gaussian_ids = None, None
 
     if compensations is not None:
@@ -325,12 +330,22 @@ def rasterization(
         colors = depths[..., None]
         if backgrounds is not None:
             backgrounds = torch.zeros(C, 1, device=backgrounds.device)
+    elif render_mode == "RGB+U":
+        colors = torch.cat((colors, uncertainties[..., None]), dim=-1)
+        if backgrounds is not None:
+            backgrounds = torch.cat(
+                [backgrounds, torch.zeros(C, 1, device=backgrounds.device)], dim=-1
+            )
+    elif render_mode == "U":
+        colors = uncertainties[..., None]
+        if backgrounds is not None:
+            backgrounds = torch.zeros(C, 1, device=backgrounds.device)
     else:  # RGB
         pass
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
-        render_colors, render_alphas = [], []
+        render_colors, render_alphas, render_uncertainties = [], [], []
         for i in range(n_chunks):
             colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
             backgrounds_chunk = (
@@ -338,11 +353,12 @@ def rasterization(
                 if backgrounds is not None
                 else None
             )
-            render_colors_, render_alphas_ = rasterize_to_pixels(
+            render_colors_, render_alphas_, render_uncertainties_ = rasterize_to_pixels(
                 means2d,
                 conics,
                 colors_chunk,
                 opacities,
+                uncertainties,
                 width,
                 height,
                 tile_size,
@@ -354,14 +370,17 @@ def rasterization(
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
+            render_uncertainties.append(render_uncertainties_)
         render_colors = torch.cat(render_colors, dim=-1)
         render_alphas = render_alphas[0]  # discard the rest
+        render_uncertainties = render_uncertainties[0]
     else:
-        render_colors, render_alphas = rasterize_to_pixels(
+        render_colors, render_alphas, render_uncertainties = rasterize_to_pixels(
             means2d,
             conics,
             colors,
             opacities,
+            uncertainties,
             width,
             height,
             tile_size,
@@ -399,4 +418,4 @@ def rasterization(
         "height": height,
         "tile_size": tile_size,
     }
-    return render_colors, render_alphas, meta
+    return render_colors, render_alphas, render_uncertainties, meta

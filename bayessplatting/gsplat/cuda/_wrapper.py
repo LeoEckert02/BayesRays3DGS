@@ -278,6 +278,7 @@ def rasterize_to_pixels(
         conics: Tensor,  # [C, N, 3] or [nnz, 3]
         colors: Tensor,  # [C, N, channels] or [nnz, channels]
         opacities: Tensor,  # [C, N] or [nnz]
+        uncertainties: Tensor,  # [C, N] or [nnz]
         image_width: int,
         image_height: int,
         tile_size: int,
@@ -286,7 +287,7 @@ def rasterize_to_pixels(
         backgrounds: Optional[Tensor] = None,  # [C, channels]
         packed: bool = False,
         absgrad: bool = False,
-) -> Tuple[Tensor, Tensor]:
+) -> Tuple[Tensor, Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
     Args:
@@ -318,12 +319,14 @@ def rasterize_to_pixels(
         assert conics.shape == (nnz, 3), conics.shape
         assert colors.shape[0] == nnz, colors.shape
         assert opacities.shape == (nnz,), opacities.shape
+        assert uncertainties.shape == (nnz,), uncertainties.shape
     else:
         N = means2d.size(1)
         assert means2d.shape == (C, N, 2), means2d.shape
         assert conics.shape == (C, N, 3), conics.shape
         assert colors.shape[:2] == (C, N), colors.shape
         assert opacities.shape == (C, N), opacities.shape
+        assert uncertainties.shape == (C, N), uncertainties.shape
     if backgrounds is not None:
         assert backgrounds.shape == (C, colors.shape[-1]), backgrounds.shape
         backgrounds = backgrounds.contiguous()
@@ -383,11 +386,12 @@ def rasterize_to_pixels(
             tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas = _RasterizeToPixels.apply(
+    render_colors, render_alphas, render_uncertainties = _RasterizeToPixels.apply(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
         opacities.contiguous(),
+        uncertainties.contiguous(),
         backgrounds,
         image_width,
         image_height,
@@ -399,7 +403,7 @@ def rasterize_to_pixels(
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
-    return render_colors, render_alphas
+    return render_colors, render_alphas, render_uncertainties
 
 
 class _FullyFusedProjection(torch.autograd.Function):
@@ -527,6 +531,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             conics: Tensor,  # [C, N, 3]
             colors: Tensor,  # [C, N, D]
             opacities: Tensor,  # [C, N]
+            uncertainties: Tensor,  # [C, N]
             backgrounds: Tensor,  # [C, D], Optional
             width: int,
             height: int,
@@ -534,14 +539,15 @@ class _RasterizeToPixels(torch.autograd.Function):
             isect_offsets: Tensor,  # [C, tile_height, tile_width]
             flatten_ids: Tensor,  # [n_isects]
             absgrad: bool,
-    ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        render_colors, render_alphas, render_uncertainties, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_fwd"
         )(
             means2d,
             conics,
             colors,
             opacities,
+            uncertainties,
             backgrounds,
             width,
             height,
@@ -568,7 +574,7 @@ class _RasterizeToPixels(torch.autograd.Function):
 
         # double to float
         render_alphas = render_alphas.float()
-        return render_colors, render_alphas
+        return render_colors, render_alphas, render_uncertainties
 
     @staticmethod
     def backward(

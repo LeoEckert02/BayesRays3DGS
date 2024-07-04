@@ -545,6 +545,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     tile_offsets += camera_id * tile_height * tile_width;
     render_colors += camera_id * image_height * image_width * COLOR_DIM;
     render_alphas += camera_id * image_height * image_width;
+    render_uncertainties += camera_id * image_height * image_width;
     last_ids += camera_id * image_height * image_width;
     if (backgrounds != nullptr) {
         backgrounds += camera_id * COLOR_DIM;
