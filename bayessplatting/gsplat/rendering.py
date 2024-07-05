@@ -19,7 +19,7 @@ def rasterization(
     quats: Tensor,  # [N, 4]
     scales: Tensor,  # [N, 3]
     opacities: Tensor,  # [N]
-    uncertainties: Tensor, # [N]
+    uncertainties: Tensor,  # [N]
     colors: Tensor,  # [(C,) N, D] or [(C,) N, K, 3]
     viewmats: Tensor,  # [C, 4, 4]
     Ks: Tensor,  # [C, 3, 3]
