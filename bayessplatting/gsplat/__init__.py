@@ -1,6 +1,6 @@
 from typing import Any
 import torch
-from .project_gaussians import project_gaussians
+from gsplat.project_gaussians import project_gaussians
 from .rasterize import rasterize_gaussians
 from .utils import (
     map_gaussian_to_intersects,
@@ -9,8 +9,8 @@ from .utils import (
     compute_cov2d_bounds,
     get_tile_bin_edges,
 )
-from .sh import spherical_harmonics
-from .version import __version__
+from gsplat.sh import spherical_harmonics
+from gsplat.version import __version__
 import warnings
 
 

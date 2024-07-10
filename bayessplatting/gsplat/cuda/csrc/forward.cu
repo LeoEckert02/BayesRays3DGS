@@ -183,7 +183,6 @@ __global__ void nd_rasterize_forward(
     const float* __restrict__ colors,
     const float* __restrict__ opacities,
     float* __restrict__ final_Ts,
-    float* __restrict__ final_uncertainties,
     int* __restrict__ final_index,
     float* __restrict__ out_img,
     const float* __restrict__ background
@@ -227,7 +226,6 @@ __global__ void nd_rasterize_forward(
     // designated pixel
     int tr = block.thread_rank();
     __half* pix_out = &color_out_batch[block.thread_rank() * channels];
-    float pix_uncertainty = 0.f;
 
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
@@ -280,9 +278,6 @@ __global__ void nd_rasterize_forward(
                 pix_out[c] = __hadd(pix_out[c], __float2half(colors[channels * g + c] * vis));
             }
 
-            // Update pixel uncertainty
-            pix_uncertainty += uncertainty_batch[t] * vis;
-
             T = next_T;
             cur_idx = batch_start + t;
         }
@@ -292,7 +287,6 @@ __global__ void nd_rasterize_forward(
         // add background
         final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
         final_index[pix_id] = cur_idx; // index of in bin of last gaussian in this pixel
-        final_uncertainties[pix_id] = pix_uncertainty;
         #pragma unroll
         for (int c = 0; c < channels; ++c) {
             out_img[pix_id * channels + c] = __half2float(pix_out[c]) + T * background[c];
@@ -311,6 +305,7 @@ __global__ void rasterize_forward(
     const float* __restrict__ opacities,
     const float* __restrict__ uncertainties,
     float* __restrict__ final_Ts,
+    float* __restrict__ final_uncertainties,
     int* __restrict__ final_index,
     float3* __restrict__ out_img,
     const float3& __restrict__ background
@@ -345,6 +340,7 @@ __global__ void rasterize_forward(
     __shared__ int32_t id_batch[MAX_BLOCK_SIZE];
     __shared__ float3 xy_opacity_batch[MAX_BLOCK_SIZE];
     __shared__ float3 conic_batch[MAX_BLOCK_SIZE];
+    __shared__ float uncertainty_batch[MAX_BLOCK_SIZE];
 
     // current visibility left to render
     float T = 1.f;
@@ -356,7 +352,7 @@ __global__ void rasterize_forward(
     // designated pixel
     int tr = block.thread_rank();
     float3 pix_out = {0.f, 0.f, 0.f};
-    float uncertainty_out =
+    float uncertainty_out = 0.f;
     for (int b = 0; b < num_batches; ++b) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
@@ -373,9 +369,9 @@ __global__ void rasterize_forward(
             id_batch[tr] = g_id;
             const float2 xy = xys[g_id];
             const float opac = opacities[g_id];
-            const float unc = uncertainties[g_id]
             xy_opacity_batch[tr] = {xy.x, xy.y, opac};
             conic_batch[tr] = conics[g_id];
+            uncertainty_batch[tr] = uncertainties[g_id];
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -410,6 +406,10 @@ __global__ void rasterize_forward(
             pix_out.x = pix_out.x + c.x * vis;
             pix_out.y = pix_out.y + c.y * vis;
             pix_out.z = pix_out.z + c.z * vis;
+
+            // Update pixel uncertainty
+            uncertainty_out += uncertainty_batch[t] * vis;
+
             T = next_T;
             cur_idx = batch_start + t;
         }
@@ -418,8 +418,8 @@ __global__ void rasterize_forward(
     if (inside) {
         // add background
         final_Ts[pix_id] = T; // transmittance at last gaussian in this pixel
-        final_index[pix_id] =
-            cur_idx; // index of in bin of last gaussian in this pixel
+        final_index[pix_id] = cur_idx; // index of in bin of last gaussian in this pixel
+        final_uncertainties[pix_id] = uncertainty_out; // uncertainty at last gaussian in this pixel
         float3 final_color;
         final_color.x = pix_out.x + T * background.x;
         final_color.y = pix_out.y + T * background.y;

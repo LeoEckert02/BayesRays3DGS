@@ -136,7 +136,7 @@ class ComputeUncertainty:
         with open(str(self.output_path), 'wb') as f:
             np.save(f, self.hessian.cpu().numpy())
         execution_time = end_time - start_time
-        breakpoint()
+        # breakpoint()
         print(f"Execution time: {execution_time:.6f} seconds")
 
     def get_outputs(self, camera: Cameras, model):

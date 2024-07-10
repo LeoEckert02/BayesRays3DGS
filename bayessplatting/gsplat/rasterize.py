@@ -7,7 +7,7 @@ from jaxtyping import Float, Int
 from torch import Tensor
 from torch.autograd import Function
 
-import gsplat.cuda as _C
+import bayessplatting.gsplat.cuda as _C
 
 from .utils import bin_and_sort_gaussians, compute_cumulative_intersects
 
@@ -183,7 +183,7 @@ class _RasterizeGaussians(Function):
 
         if return_alpha:
             out_alpha = 1 - final_Ts
-            return out_img, out_alpha,
+            return out_img, out_alpha, final_uncertainties
         else:
             return out_img
 

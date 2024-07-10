@@ -12,3 +12,4 @@ include = ["bayessplatting*"]
 
 [project.scripts]
 ns-uncertainty = "bayessplatting.scripts.uncertainty:entrypoint"
+ns-viewer-ubs = "bayessplatting.scripts.viewer.run_viewer_uncertainty_gs:entrypoint"
