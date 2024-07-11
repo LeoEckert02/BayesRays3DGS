@@ -30,7 +30,7 @@ import numpy as np
 import torch
 import tyro
 from gsplat import spherical_harmonics
-from bayessplatting.gsplat.rasterize import rasterize_gaussians
+from gsplat.rasterize import rasterize_gaussians
 from gsplat.project_gaussians import project_gaussians
 from nerfstudio.cameras.cameras import Cameras
 
@@ -132,8 +132,7 @@ def get_outputs(self, camera: Cameras):
         scales_crop = self.scales
         quats_crop = self.quats
 
-
-    un_points = self.get_uncertainty(means_crop)
+    un_points = self.get_uncertainty(means_crop).view(-1)
 
     colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
     BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
@@ -176,7 +175,7 @@ def get_outputs(self, camera: Cameras):
     else:
         raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
 
-    rgb, alpha, uncertainty = rasterize_gaussians(  # type: ignore
+    rgb, alpha = rasterize_gaussians(  # type: ignore
         self.xys,
         depths,
         self.radii,
@@ -184,7 +183,6 @@ def get_outputs(self, camera: Cameras):
         num_tiles_hit,  # type: ignore
         rgbs,
         opacities,
-        un_points,
         H,
         W,
         BLOCK_WIDTH,
@@ -194,10 +192,13 @@ def get_outputs(self, camera: Cameras):
     alpha = alpha[..., None]
     rgb = torch.clamp(rgb, max=1.0)  # type: ignore
     depth_im = None
+    uncertainty_im = None
 
-    #normalize into acceptable range for rendering
-    uncertainty = torch.clip(uncertainty, min_uncertainty, max_uncertainty)
-    uncertainty = (uncertainty-min_uncertainty)/(max_uncertainty-min_uncertainty)
+    # #normalize into acceptable range for rendering
+    # uncertainty = torch.clip(uncertainty, min_uncertainty, max_uncertainty)
+    # uncertainty = (uncertainty-min_uncertainty)/(max_uncertainty-min_uncertainty)
+
+    #breakpoint()
 
     if self.config.output_depth_during_training or not self.training:
         depth_im = rasterize_gaussians(  # type: ignore
@@ -208,15 +209,32 @@ def get_outputs(self, camera: Cameras):
             num_tiles_hit,  # type: ignore
             depths[:, None].repeat(1, 3),
             opacities,
-            un_points,
+            H,
+            W,
+            BLOCK_WIDTH,
+            background=torch.zeros(3, device=self.device),
+        )[..., 0:1]  # type: ignore
+        uncertainty_im = rasterize_gaussians(  # type: ignore
+            self.xys,
+            depths,
+            self.radii,
+            conics,
+            num_tiles_hit,  # type: ignore
+            un_points[:, None].repeat(1, 3),
+            opacities,
             H,
             W,
             BLOCK_WIDTH,
             background=torch.zeros(3, device=self.device),
         )[..., 0:1]  # type: ignore
         depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
+        # breakpoint()
+        nan_tensor = torch.full_like(uncertainty_im, -4)
+        uncertainty_im = torch.where(alpha > 0, uncertainty_im / alpha, nan_tensor)
+        uncertainty_im = torch.clip(uncertainty_im, min_uncertainty, max_uncertainty)
+        uncertainty_im = (uncertainty_im - min_uncertainty) / (max_uncertainty - min_uncertainty)
 
-    return {"rgb": rgb, "depth": depth_im, "accumulation": alpha, "uncertainties": uncertainty,
+    return {"rgb": rgb, "depth": depth_im, "accumulation": alpha, "uncertainty": uncertainty_im,
             "background": background}  # type: ignore
 
 
@@ -248,7 +266,6 @@ class RunViewer:
     black_bg: bool = False
     """ Render empty space as black when filtering"""
 
-
     def main(self) -> None:
         """Main function."""
         config, pipeline, _, step = eval_setup(
@@ -273,7 +290,6 @@ class RunViewer:
         pipeline.model.get_outputs = types.MethodType(get_outputs, pipeline.model)
 
         _start_viewer(config, pipeline, step)
-
 
     def save_checkpoint(self, *args, **kwargs):
         """
