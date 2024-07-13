@@ -134,6 +134,16 @@ def get_outputs(self, camera: Cameras):
 
     un_points = self.get_uncertainty(means_crop).view(-1)
 
+    # Filter out Gaussians with uncertainty greater than the threshold
+    valid_indices = un_points <= self.filter_threshold
+    opacities_crop = opacities_crop[valid_indices]
+    means_crop = means_crop[valid_indices]
+    features_dc_crop = features_dc_crop[valid_indices]
+    features_rest_crop = features_rest_crop[valid_indices]
+    scales_crop = scales_crop[valid_indices]
+    quats_crop = quats_crop[valid_indices]
+    un_points = un_points[valid_indices]
+
     colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
     BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
     self.xys, depths, self.radii, conics, comp, num_tiles_hit, cov3d = project_gaussians(  # type: ignore
