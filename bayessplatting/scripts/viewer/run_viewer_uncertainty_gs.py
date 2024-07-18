@@ -48,15 +48,6 @@ from bayessplatting.scripts.output_uncertainty import get_uncertainty
 
 
 def get_outputs(self, camera: Cameras):
-    """Takes in a Ray Bundle and returns a dictionary of outputs.
-
-    Args:
-        ray_bundle: Input bundle of rays. This raybundle should have all the
-        needed information to compute the outputs.
-
-    Returns:
-        Outputs of model. (ie. rendered colors)
-    """
     if not isinstance(camera, Cameras):
         print("Called get_outputs with not a camera")
         return {}
@@ -134,8 +125,14 @@ def get_outputs(self, camera: Cameras):
 
     un_points = self.get_uncertainty(means_crop).view(-1)
 
+    # Normalize the uncertainty values between 0 and 1
+    un_points_min = un_points.min()
+    un_points_max = un_points.max()
+
+    un_points_cp = (un_points - un_points_min) / (un_points_max - un_points_min)
+
     # Filter out Gaussians with uncertainty greater than the threshold
-    valid_indices = un_points <= self.filter_threshold
+    valid_indices = un_points_cp <= self.filter_thresh
     opacities_crop = opacities_crop[valid_indices]
     means_crop = means_crop[valid_indices]
     features_dc_crop = features_dc_crop[valid_indices]
@@ -208,7 +205,7 @@ def get_outputs(self, camera: Cameras):
     # uncertainty = torch.clip(uncertainty, min_uncertainty, max_uncertainty)
     # uncertainty = (uncertainty-min_uncertainty)/(max_uncertainty-min_uncertainty)
 
-    #breakpoint()
+    # breakpoint()
 
     if self.config.output_depth_during_training or not self.training:
         depth_im = rasterize_gaussians(  # type: ignore
@@ -292,7 +289,7 @@ class RunViewer:
         self.device = pipeline.device
         pipeline.model.filter_thresh = 1.
         pipeline.model.hessian = torch.tensor(np.load(str(self.unc_path)), device=self.device)
-        pipeline.model.N = 4096 * 1000  # approx ray dataset size (train batch size x number of query iterations in uncertainty extraction step)
+        pipeline.model.N = 4096*1000  # approx ray dataset size (train batch size x number of query iterations in uncertainty extraction step)
         pipeline.model.lod = np.log2(round(pipeline.model.hessian.shape[0] ** (1 / 3)) - 1)
         pipeline.model.get_uncertainty = types.MethodType(get_uncertainty, pipeline.model)
         pipeline.model.white_bg = self.white_bg
@@ -339,6 +336,10 @@ def _start_viewer(config: TrainerConfig, pipeline: Pipeline, step: int):
             share=config.viewer.make_share_url,
             train_lock=viewer_callback_lock,
         )
+
+        def on_change_callback(handle: ViewerSlider) -> None:
+            pipeline.model.filter_thresh = handle.value
+
         viewer_state.control_panel._filter = ViewerSlider(
             "Filter Threshold",
             default_value=1.,
@@ -346,6 +347,7 @@ def _start_viewer(config: TrainerConfig, pipeline: Pipeline, step: int):
             max_value=1,
             step=0.05,
             hint="Filtering threshold for uncertain areas.",
+            cb_hook=on_change_callback,
         )
         viewer_state.control_panel.add_element(viewer_state.control_panel._filter)
         banner_messages = viewer_state.viewer_info
@@ -365,7 +367,7 @@ def _start_viewer(config: TrainerConfig, pipeline: Pipeline, step: int):
     viewer_state.update_scene(step=step)
     while True:
         time.sleep(0.01)
-        pipeline.model.filter_thresh = viewer_state.control_panel._filter.value
+
 
 
 def entrypoint():
