@@ -289,7 +289,7 @@ class RunViewer:
         self.device = pipeline.device
         pipeline.model.filter_thresh = 1.
         pipeline.model.hessian = torch.tensor(np.load(str(self.unc_path)), device=self.device)
-        pipeline.model.N = 4096*1000  # approx ray dataset size (train batch size x number of query iterations in uncertainty extraction step)
+        pipeline.model.N = 1000*1920*1080  # approx ray dataset size (train batch size x number of query iterations in uncertainty extraction step)
         pipeline.model.lod = np.log2(round(pipeline.model.hessian.shape[0] ** (1 / 3)) - 1)
         pipeline.model.get_uncertainty = types.MethodType(get_uncertainty, pipeline.model)
         pipeline.model.white_bg = self.white_bg

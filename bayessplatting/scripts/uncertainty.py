@@ -33,22 +33,18 @@ class ComputeUncertainty:
 
     def find_uncertainty(self, points, deform_points, rgb):
         inds, coeffs = find_grid_indices(points, self.aabb, self.lod, self.device)
-        # breakpoint()
         # because deformation params are detached for each point on each ray from the grid, summation does not affect derivative
         colors = torch.sum(rgb, dim=0)
         colors[0].backward(retain_graph=True)
         r = deform_points.grad.clone().detach().view(-1, 3)
-        print("Offset of the points (deform_points):", deform_points)
 
         deform_points.grad.zero_()
         colors[1].backward(retain_graph=True)
         g = deform_points.grad.clone().detach().view(-1, 3)
-        print("Gradient after first backward pass (g):", g)
 
         deform_points.grad.zero_()
         colors[2].backward()
         b = deform_points.grad.clone().detach().view(-1, 3)
-        print("Gradient after third backward pass (b):", b)
 
         deform_points.grad.zero_()
         dmy = torch.arange(inds.shape[1], device=self.device)
@@ -82,11 +78,9 @@ class ComputeUncertainty:
         # vector as indicator of hessian wrt the whole vector
 
         grads_all = torch.cat((keys_all[:, 1].unsqueeze(-1), (grad_1 + grad_2 + grad_3).unsqueeze(-1)), dim=-1)
-        print("Gradients for each deformation component combined (grads_all):", grads_all)
 
         hessian = torch.zeros(((2 ** self.lod) + 1) ** 3).to(self.device)
         hessian = hessian.put((grads_all[:, 0]).long(), grads_all[:, 1], True)
-        print("Hessian:", hessian)
 
 
         return hessian
