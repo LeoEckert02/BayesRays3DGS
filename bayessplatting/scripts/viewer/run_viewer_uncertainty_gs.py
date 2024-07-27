@@ -339,13 +339,14 @@ def _start_viewer(config: TrainerConfig, pipeline: Pipeline, step: int):
 
         def on_change_callback(handle: ViewerSlider) -> None:
             pipeline.model.filter_thresh = handle.value
+            viewer_state._trigger_rerender()
 
         viewer_state.control_panel._filter = ViewerSlider(
             "Filter Threshold",
             default_value=1.,
             min_value=0.0,
             max_value=1,
-            step=0.05,
+            step=0.01,
             hint="Filtering threshold for uncertain areas.",
             cb_hook=on_change_callback,
         )
