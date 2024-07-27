@@ -32,7 +32,8 @@ class ComputeUncertainty:
     iters: int = 1000
 
     def find_uncertainty(self, points, deform_points, rgb):
-        inds, coeffs = find_grid_indices(points, self.aabb, self.lod, self.device)
+        inds, coeffs = find_grid_indices(points, self.lod, self.device)
+        # breakpoint()
         # because deformation params are detached for each point on each ray from the grid, summation does not affect derivative
         colors = torch.sum(rgb, dim=0)
         colors[0].backward(retain_graph=True)
@@ -98,7 +99,6 @@ class ComputeUncertainty:
         start_time = time.time()
 
         self.device = pipeline.device
-        self.aabb = pipeline.model.scene_box.aabb.to(self.device)
         self.hessian = torch.zeros(((2 ** self.lod) + 1) ** 3).to(self.device)
         self.deform_field = HashEncoding(num_levels=1,
                                          min_res=2 ** self.lod,
@@ -204,7 +204,7 @@ class ComputeUncertainty:
 
         # breakpoint()
         # get the offsets from the deform field
-        normalized_points, _ = normalize_point_coords(means_crop, self.aabb)
+        normalized_points = normalize_point_coords(means_crop)
         offsets = self.deform_field(normalized_points).clone().detach()
         offsets.requires_grad = True
         # breakpoint()

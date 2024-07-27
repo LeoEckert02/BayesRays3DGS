@@ -2,9 +2,8 @@ import torch
 from nerfstudio.data.scene_box import SceneBox
 
 
-def find_grid_indices(points, aabb: SceneBox, lod, device, zero_out=True):
-    pos, selector = normalize_point_coords(points, aabb)
-    pos, selector = pos.view(-1, 3), selector[..., None].view(-1, 1)
+def find_grid_indices(points, lod, device):
+    pos = normalize_point_coords(points)
     uncertainty_lod = 2 ** lod
     coords = (pos * uncertainty_lod).unsqueeze(0)
     inds = torch.zeros((8, pos.shape[0]), dtype=torch.int32, device=device)
@@ -21,15 +20,11 @@ def find_grid_indices(points, aabb: SceneBox, lod, device, zero_out=True):
         coords[..., 0] - (torch.floor(coords[..., 0]) + (1 - corners[:, :, 1]))) * torch.abs(
         coords[..., 1] - (torch.floor(coords[..., 1]) + (1 - corners[:, :, 2]))) * torch.abs(
         coords[..., 2] - (torch.floor(coords[..., 2]) + (1 - corners[:, :, 3])))
-    if zero_out:
-        coefs[corners[:, :, 0].squeeze(1)] *= selector[..., 0].unsqueeze(
-            0)  # zero out the contribution of points outside aabb box
 
     return inds, coefs
 
 
-def normalize_point_coords(points, aabb):
-    pos = SceneBox.get_normalized_positions(points, aabb)
-    selector = ((pos > 0.0) & (pos < 1.0)).all(dim=-1)
-    pos = pos * selector[..., None]
-    return pos, selector
+def normalize_point_coords(points):
+    min_val = torch.min(points)
+    max_val = torch.max(points)
+    return (points - min_val) / (max_val - min_val)
