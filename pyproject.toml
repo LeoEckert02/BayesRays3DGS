@@ -5,13 +5,18 @@ version = "0.1"
 dependencies = [
     "nerfstudio==1.1.0",
     "gsplat>=0.1.11,<1.0.0",
-    "numpy<2.0.0"
+    "numpy<2.0.0",
+    "torchtyping>=0.1.4",
 ]
 
 [tool.setuptools.packages.find]
 include = ["bayessplatting*"]
 
+[project.entry-points.'nerfstudio.dataparser_configs']
+sparse-nerfstudio = 'bayessplatting.dataparsers.sparse.sparse_nerfstudio_config:sparseNsDataparser'
+
 [project.scripts]
 ns-uncertainty = "bayessplatting.scripts.uncertainty:entrypoint"
-ns-viewer-ubs = "bayessplatting.scripts.viewer.run_viewer_uncertainty_gs:entrypoint"
-ns-render-ubs = "bayessplatting.scripts.render_uncertainty:entrypoint"
+ns-viewer-ugs = "bayessplatting.scripts.viewer.run_viewer_uncertainty_gs:entrypoint"
+ns-render-ugs = "bayessplatting.scripts.render_uncertainty:entrypoint"
+ns-eval-ugs = "bayessplatting.scripts.eval_uncertainty:entrypoint"
