@@ -1,0 +1,16 @@
+{
+  "experiment_name": "africa",
+  "method_name": "splatfacto",
+  "checkpoint": "outputs/africa/splatfacto/main/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 1.0,
+    "ssim": 1.0,
+    "lpips": 1.0,
+    "ause_mse": 0.271695077419281,
+    "ause_mae": 0.14134986698627472,
+    "ause_rmse": 0.1960383951663971,
+    "mse": 0.09638737142086029,
+    "num_rays_per_sec": 381560.125,
+    "fps": 1.6560770273208618
+  }
+}

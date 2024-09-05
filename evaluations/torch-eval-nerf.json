@@ -1,0 +1,16 @@
+{
+  "experiment_name": "torch",
+  "method_name": "nerfacto",
+  "checkpoint": "outputs/torch/nerfacto/main/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 23.795886993408203,
+    "ssim": 0.8651638627052307,
+    "lpips": 0.0981585830450058,
+    "ause_mse": 0.4115787744522095,
+    "ause_mae": 0.306929349899292,
+    "ause_rmse": 0.4325597584247589,
+    "mse": 0.004692744463682175,
+    "num_rays_per_sec": 106437.234375,
+    "fps": 0.4619671702384949
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "experiment_name": "basket",
+  "method_name": "splatfacto",
+  "checkpoint": "outputs/basket/splatfacto/main/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 1.0,
+    "ssim": 1.0,
+    "lpips": 1.0,
+    "ause_mse": 0.3199045956134796,
+    "ause_mae": 0.16975189745426178,
+    "ause_rmse": 0.24558280408382416,
+    "mse": 0.10837805271148682,
+    "num_rays_per_sec": 381352.34375,
+    "fps": 1.757383942604065
+  }
+}

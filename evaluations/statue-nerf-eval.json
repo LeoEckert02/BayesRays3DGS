@@ -1,0 +1,16 @@
+{
+  "experiment_name": "statue",
+  "method_name": "nerfacto",
+  "checkpoint": "outputs/statue/nerfacto/test1/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 30.070219039916992,
+    "ssim": 0.9357782602310181,
+    "lpips": 0.05655606836080551,
+    "ause_mse": 0.11005404591560364,
+    "ause_mae": 0.10973964631557465,
+    "ause_rmse": 0.15455922484397888,
+    "mse": 0.03087562322616577,
+    "num_rays_per_sec": 107897.53125,
+    "fps": 0.4683052599430084
+  }
+}

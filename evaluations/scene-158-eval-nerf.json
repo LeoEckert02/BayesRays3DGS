@@ -1,0 +1,16 @@
+{
+  "experiment_name": "scene_158",
+  "method_name": "nerfacto",
+  "checkpoint": "outputs/scene_158/nerfacto/main/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 25.374000549316406,
+    "ssim": 0.8620070219039917,
+    "lpips": 0.22189147770404816,
+    "ause_mse": 0.33689451217651367,
+    "ause_mae": 0.21409578621387482,
+    "ause_rmse": 0.23679061233997345,
+    "mse": 0.35422810912132263,
+    "num_rays_per_sec": 114868.859375,
+    "fps": 0.38836440443992615
+  }
+}

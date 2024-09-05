@@ -1,0 +1,16 @@
+{
+  "experiment_name": "scene_079",
+  "method_name": "splatfacto",
+  "checkpoint": "outputs/scene_079/splatfacto/main/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 1.0,
+    "ssim": 1.0,
+    "lpips": 1.0,
+    "ause_mse": 0.26111355423927307,
+    "ause_mae": 0.1645267754793167,
+    "ause_rmse": 0.16961665451526642,
+    "mse": 0.42717400193214417,
+    "num_rays_per_sec": 481186.65625,
+    "fps": 1.626861810684204
+  }
+}

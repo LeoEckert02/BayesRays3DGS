@@ -1,0 +1,16 @@
+{
+  "experiment_name": "torch",
+  "method_name": "splatfacto",
+  "checkpoint": "outputs/torch/splatfacto/main/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 1.0,
+    "ssim": 1.0,
+    "lpips": 1.0,
+    "ause_mse": 0.42104703187942505,
+    "ause_mae": 0.28319090604782104,
+    "ause_rmse": 0.48526206612586975,
+    "mse": 0.01104612648487091,
+    "num_rays_per_sec": 378937.3125,
+    "fps": 1.64469313621521
+  }
+}

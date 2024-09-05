@@ -1,0 +1,16 @@
+{
+  "experiment_name": "statue",
+  "method_name": "splatfacto",
+  "checkpoint": "outputs/statue/splatfacto/2024-08-21_201854/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 1.0,
+    "ssim": 1.0,
+    "lpips": 1.0,
+    "ause_mse": 0.12138273566961288,
+    "ause_mae": 0.07300734519958496,
+    "ause_rmse": 0.09932545572519302,
+    "mse": 0.1305432766675949,
+    "num_rays_per_sec": 74562.9453125,
+    "fps": 0.3236238658428192
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "experiment_name": "basket",
+  "method_name": "nerfacto",
+  "checkpoint": "outputs/basket/nerfacto/main/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 23.838882446289062,
+    "ssim": 0.8954968452453613,
+    "lpips": 0.055545128881931305,
+    "ause_mse": 0.2327037900686264,
+    "ause_mae": 0.1706913560628891,
+    "ause_rmse": 0.2974332273006439,
+    "mse": 0.009902012534439564,
+    "num_rays_per_sec": 107392.015625,
+    "fps": 0.4948940873146057
+  }
+}

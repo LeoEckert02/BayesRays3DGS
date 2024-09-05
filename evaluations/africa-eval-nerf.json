@@ -1,0 +1,16 @@
+{
+  "experiment_name": "africa",
+  "method_name": "nerfacto",
+  "checkpoint": "outputs/africa/nerfacto/main/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 28.29566192626953,
+    "ssim": 0.9176822900772095,
+    "lpips": 0.04574995115399361,
+    "ause_mse": 0.2397322952747345,
+    "ause_mae": 0.19799120724201202,
+    "ause_rmse": 0.27637070417404175,
+    "mse": 0.021647213026881218,
+    "num_rays_per_sec": 104407.4765625,
+    "fps": 0.4531574547290802
+  }
+}
