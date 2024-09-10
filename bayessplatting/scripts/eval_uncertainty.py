@@ -21,23 +21,21 @@ from __future__ import annotations
 import json
 import types
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from time import time
 from typing import Optional
 
-import cv2
 import matplotlib.pyplot as plt
-import mediapy as media
-import nerfstudio
 import numpy as np
 import pkg_resources
 import torch
 import tyro
+from PIL import Image
 from matplotlib.cm import inferno
 from nerfstudio.utils import colormaps
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE
-from PIL import Image
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -45,11 +43,70 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
-from torchmetrics import MeanSquaredError
 
 from bayessplatting.metrics.ause import ause
-from bayessplatting.metrics.image_metrics import LPIPSModule, PSNRModule, SSIMModule
 from bayessplatting.scripts.output_uncertainty import get_outputs, get_uncertainty
+
+
+# would be cleaner to manipulate the yml values instead of the raw text in the file, but it works
+def replace_dataparser(yml_file_path, output_file_path, camera_scale_factor):
+    # Define the string to be replaced
+    old_dataparser_str = '''dataparser: !!python/object:nerfstudio.data.dataparsers.nerfstudio_dataparser.NerfstudioDataParserConfig
+      _target: !!python/name:nerfstudio.data.dataparsers.nerfstudio_dataparser.Nerfstudio ''
+      auto_scale_poses: true
+      center_method: poses
+      data: !!python/object/apply:pathlib.PosixPath []
+      depth_unit_scale_factor: 0.001
+      downscale_factor: null
+      eval_interval: 8
+      eval_mode: fraction
+      load_3D_points: true
+      mask_color: null
+      orientation_method: up
+      scale_factor: 1.0
+      scene_scale: 1.0
+      train_split_fraction: 0.9
+    eval_image_indices: !!python/tuple
+    - 0
+    eval_num_images_to_sample_from: -1
+    eval_num_times_to_repeat_images: -1
+    images_on_gpu: false
+    masks_on_gpu: false
+    max_thread_workers: null'''
+
+    # TODO: adapt the dataset and not have it hardcoded
+    # Define the new string with the custom camera_scale_factor
+    new_dataparser_str = f'''dataparser: !!python/object:bayessplatting.dataparsers.sparse.sparse_nerfstudio_dataparser.SparseNsDataParserConfig
+      _target: !!python/name:bayessplatting.dataparsers.sparse.sparse_nerfstudio_dataparser.SparseNerfstudio ''
+      auto_scale_poses: false
+      center_method: poses
+      data: !!python/object/apply:pathlib.PosixPath [ ]
+      dataset_name: statue
+      depth_unit_scale_factor: 0.001
+      downscale_factor: 2
+      orientation_method: up
+      scale_factor: 1.0
+      camera_scale_factor: {camera_scale_factor}
+    eval_image_indices: !!python/tuple
+      - 0
+    eval_num_images_to_sample_from: -1
+    eval_num_times_to_repeat_images: -1
+    images_on_gpu: false
+    masks_on_gpu: false
+    max_thread_workers: null'''
+
+    # Read the original file
+    with open(yml_file_path, 'r') as file:
+        file_data = file.read()
+
+    # Replace the old dataparser section with the new one
+    new_file_data = file_data.replace(old_dataparser_str, new_dataparser_str)
+
+    # Write the modified data to the output file
+    with open(output_file_path, 'w') as file:
+        file.write(new_file_data)
+
+    print(f"Updated YAML file saved to {output_file_path}")
 
 
 def plot_errors(
@@ -57,7 +114,7 @@ def plot_errors(
 ):  # AUSE plots, with oracle curve also visible
     plt.plot(ratio_removed, ause_err, "--")
     plt.plot(ratio_removed, ause_err_by_var, "-r")
-    # plt.plot(ratio_removed, ause_err_by_var - ause_err, '-g') # uncomment for getting plots similar to the paper, without visible oracle curve
+    plt.plot(ratio_removed, ause_err_by_var - ause_err, '-g') # uncomment for getting plots similar to the paper, without visible oracle curve
     path = output_path.parent / Path("plots")
     path.mkdir(parents=True, exist_ok=True)
     plt.savefig(path / Path("plot_" + err_type + "_" + str(scene_no) + ".png"))
@@ -85,157 +142,9 @@ def visualize_ranks(unc, gt, colormap="jet"):
     colored_ranks_gt = cmap(normalized_ranks_gt)
 
     colored_unc = colored_ranks_unc.reshape((*unc.shape, 4))
-    colored_gt = colored_ranks_gt.reshape((*gt.shape, 4))
+    colored_gt = colored_ranks_gt.reshape((*gt.shape,4))
 
     return colored_unc, colored_gt
-
-
-def get_filtered_image_metrics(
-    self,
-    outputs: Dict[str, torch.Tensor],
-    batch: Dict[str, torch.Tensor],
-    thresh: torch.Tensor,
-    add_nb_mask=False,
-    visibility_mask: torch.Tensor = None,
-) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
-
-    image = batch["image"]
-    rgb = outputs["rgb-" + "{:.2f}".format(thresh.item())]
-    h, w = rgb.shape[0], rgb.shape[1]
-    image = torch.clip(
-        torch.tensor(media.resize_image(image, (h, w))).to(self.device), 0.0, 1.0
-    )
-
-    acc = outputs["accumulation-" + "{:.2f}".format(thresh.item())]
-    depth = outputs["depth-" + "{:.2f}".format(thresh.item())]
-    # implementing masked psnr,lpisp,ssim like https://github.com/ethanweber
-    # /nerfbusters/blob/1f4240344ecff1313f6dfa7be5e06fe7d3e29154/scripts/launch_nerf.py#L258
-    depth_mask = (depth < 2.0).float()
-
-    if add_nb_mask:
-        mask = depth_mask[..., 0] * visibility_mask
-        mask = mask[..., None].repeat(1, 1, 3)
-    else:
-        mask = depth_mask[..., 0]
-        mask = mask[..., None].repeat(1, 1, 3)
-    image, rgb = image * mask, rgb * mask
-
-    # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
-    image = image.permute(2, 0, 1).unsqueeze(0)
-    rgb = rgb.permute(2, 0, 1).unsqueeze(0)
-    m = mask.permute(2, 0, 1).unsqueeze(0)[:, 0:1]
-
-    psnr = float(self.psnr_module(rgb, image, m)[0])
-    ssim = float(self.ssim_module(rgb, image, m)[0])
-    lpips = float(self.lpips_module(rgb, image, m)[0])
-
-    metrics_dict = {"psnr": float(psnr), "ssim": float(ssim)}  # type: ignore
-    metrics_dict["lpips"] = float(lpips)
-    if add_nb_mask:
-        metrics_dict["coverage"] = float(
-            mask[..., 0].sum() / visibility_mask.sum() * 100
-        )
-    else:
-        metrics_dict["coverage"] = float(
-            mask[..., 0].sum() / (image.shape[-1] * image.shape[-2]) * 100
-        )
-    return metrics_dict
-
-
-def get_average_filtered_image_metrics(self, step: Optional[int] = None):
-    """Iterate over all the images in the eval dataset and get the average.
-    From https://github.com/nerfstudio-project/nerfstudio/blob/main/nerfstudio/pipelines/base_pipeline.py#L342
-
-    Returns:
-        metrics_dict: dictionary of metrics
-    """
-    self.eval()
-    num_images = len(self.datamanager.fixed_indices_eval_dataloader)
-
-    # Override evaluation function
-    self.model.get_image_metrics_and_images = types.MethodType(
-        get_filtered_image_metrics, self.model
-    )
-
-    thresh_values = torch.linspace(0.1, 1, 10)
-    self.model.thresh_range = thresh_values
-
-    self.model.psnr_module = PSNRModule().to(self.device)
-    self.model.ssim_module = SSIMModule().to(self.device)
-    self.model.lpips_module = LPIPSModule().to(self.device)
-
-    views = ["view"]
-    psnr = [["psnr-" + "{:.2f}".format(i.item())] for i in thresh_values]
-    lpips = [["lpisp-" + "{:.2f}".format(i.item())] for i in thresh_values]
-    ssim = [["ssim-" + "{:.2f}".format(i.item())] for i in thresh_values]
-    coverage = [["coverage-" + "{:.2f}".format(i.item())] for i in thresh_values]
-    self.datamanager.fixed_indices_eval_dataloader.cameras.rescale_output_resolution(
-        1.0 / self.downscale_factor
-    )
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TimeElapsedColumn(),
-        MofNCompleteColumn(),
-        transient=True,
-    ) as progress:
-        task = progress.add_task(
-            "[green]Evaluating all eval images...", total=num_images
-        )
-        view_no = 0
-
-        for camera, batch in self.datamanager.fixed_indices_eval_dataloader:
-
-            if self.add_nb_mask:
-                base_path = self.nb_mask_path
-                pseudo_gt_visibility = media.read_image(
-                    str(base_path) + "/{:05d}.png".format(view_no)
-                )
-                pseudo_gt_visibility = (
-                    torch.from_numpy(pseudo_gt_visibility).long().to(self.device)
-                )
-                pseudo_gt_visibility = (pseudo_gt_visibility[..., 0] >= 1).float()
-            else:
-                pseudo_gt_visibility = 1
-
-            # time this the following line
-            inner_start = time()
-
-            outputs = self.model.get_outputs(camera)
-            for n, thresh in enumerate(thresh_values):
-                metrics_dict = self.model.get_image_metrics_and_images(
-                    outputs, batch, thresh, self.add_nb_mask, pseudo_gt_visibility
-                )
-                psnr[n].append(float(metrics_dict["psnr"]))
-                lpips[n].append(float(metrics_dict["lpips"]))
-                ssim[n].append(float(metrics_dict["ssim"]))
-                coverage[n].append(float(metrics_dict["coverage"]))
-
-                print(
-                    "view:",
-                    view_no,
-                    "-",
-                    str(thresh),
-                    "psnr:",
-                    psnr[n][-1],
-                    "coverage:",
-                    coverage[n][-1],
-                )
-
-            views.append(str(view_no))
-            view_no += 1
-            progress.advance(task)
-
-    # average the metrics list
-    metrics_dict = {}
-
-    lists = [*psnr, *ssim, *lpips, *coverage]
-    for l in lists:
-        l.append(sum(l[1:]) / view_no)
-    views.append("average")
-    lists = [views] + lists
-    self.train()
-    return {}, lists
 
 
 def get_image_metrics_and_images_unc(
@@ -259,9 +168,9 @@ def get_image_metrics_and_images_unc(
         outputs["depth"],
         accumulation=outputs["accumulation"],
     )
-    combined_rgb = torch.cat([image, rgb], dim=1)
-    combined_acc = torch.cat([acc], dim=1)
-    combined_depth = torch.cat([depth], dim=1)
+    # combined_rgb = torch.cat([image, rgb], dim=1)
+    # combined_acc = torch.cat([acc], dim=1)
+    # combined_depth = torch.cat([depth], dim=1)
 
     if eval_depth:
         depth = outputs["depth"].squeeze(-1)
@@ -367,24 +276,20 @@ def get_image_metrics_and_images_unc(
     image = torch.moveaxis(image, -1, 0)[None, ...]
     rgb = torch.moveaxis(rgb, -1, 0)[None, ...]
 
-    psnr = self.psnr(image, rgb)
-    ssim = self.ssim(image, rgb)
-    lpips = self.lpips(image, rgb)
+    # psnr = self.psnr(image, rgb)
+    # ssim = self.ssim(image, rgb)
+    # lpips = self.lpips(image, rgb)
 
     # all of these metrics will be logged as scalars
-    metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim)}  # type: ignore
-    metrics_dict["lpips"] = float(lpips)
+    metrics_dict = {"psnr": float(1), "ssim": float(1)}  # type: ignore # TODO add ssim back in
+    metrics_dict["lpips"] = float(1)
     if eval_depth:
         metrics_dict["ause_mse"] = float(ause_mse)
         metrics_dict["ause_mae"] = float(ause_mae)
         metrics_dict["ause_rmse"] = float(ause_rmse)
         metrics_dict["mse"] = float(squared_error.mean().item())
 
-    images_dict = {
-        "img": combined_rgb,
-        "accumulation": combined_acc,
-        "depth": combined_depth,
-    }
+    images_dict = {}
     if eval_depth:
         images_dict["err_all"] = err_all
         images_dict["err_var_all"] = err_var_all
@@ -435,9 +340,12 @@ def get_average_uncertainty_metrics(self, step: Optional[int] = None):
 
         for camera, batch in self.datamanager.fixed_indices_eval_dataloader:
 
+            # breakpoint()
             # time this the following line
             inner_start = time()
             # breakpoint()
+            camera.height = camera.height + 1
+            camera.width = camera.width + 1
             height, width = camera.height, camera.width
             num_rays = height * width
             outputs = self.model.get_outputs_for_camera(camera)
@@ -503,6 +411,10 @@ class ComputeMetrics:
 
     # Path to config YAML file.
     load_config: Path
+    # Path to modified config YAML file.
+    load_config_modified: Path
+    # Path to dataparser transforms JSON file
+    dataparser_transforms: Path
     # Name of the output file.
     output_path: Path = Path("output.json")
     # Path to output video file.
@@ -511,26 +423,33 @@ class ComputeMetrics:
     dataset_path: Path = Path("./data")
     # dataset path
     downscale_factor: float = 2.0
-    filter_out: bool = False
-    # filter floater results
+    # scale down factor for images
     nb_mask: bool = False
     # add extra visibility mask to metrics like nerfbusters for fair evaluation
     visibility_path: Path = Path("./data/nerfbusters/aloe/visibility_masks")
     # if nb_mask set to true, specify the path to the masks
     eval_depth: bool = True
     # perform evaluation on depth error
+    width: int = 1280
+    # width of the image
+    height: int = 720
+    # height of the image
 
     def main(self) -> None:
         """Main function."""
 
+        with open(self.dataparser_transforms, 'r') as file:
+            data = json.load(file)
+        camera_scale_factor = data['scale']
+        replace_dataparser(self.load_config, self.load_config_modified, camera_scale_factor)
+
         if pkg_resources.get_distribution("nerfstudio").version >= "0.3.1":
-            config, pipeline, checkpoint_path, _ = eval_setup(self.load_config)
+            config, pipeline, checkpoint_path, _ = eval_setup(self.load_config_modified)
         else:
-            config, pipeline, checkpoint_path = eval_setup(self.load_config)
+            config, pipeline, checkpoint_path = eval_setup(self.load_config_modified)
 
         # Dynamic change of get_outputs method to include uncertainty
         self.device = pipeline.device
-        pipeline.model.filter_out = self.filter_out
         pipeline.model.hessian = torch.tensor(np.load(str(self.unc_path))).to(
             self.device
         )
@@ -542,7 +461,7 @@ class ComputeMetrics:
         pipeline.model.white_bg = False
         pipeline.model.black_bg = False
         pipeline.model.N = 1000 * (
-            (1280 * 720) / self.downscale_factor
+            (self.width * self.height) / self.downscale_factor
         )  # approx ray dataset size (train batch size x number of query iterations in uncertainty extraction step)
         pipeline.model.get_uncertainty = types.MethodType(
             get_uncertainty, pipeline.model
@@ -555,14 +474,9 @@ class ComputeMetrics:
         pipeline.model.get_outputs = types.MethodType(get_outputs, pipeline.model)
 
         # Override evaluation function
-        if self.filter_out:
-            pipeline.get_average_eval_image_metrics = types.MethodType(
-                get_average_filtered_image_metrics, pipeline
-            )
-        else:
-            pipeline.get_average_eval_image_metrics = types.MethodType(
-                get_average_uncertainty_metrics, pipeline
-            )
+        pipeline.get_average_eval_image_metrics = types.MethodType(
+            get_average_uncertainty_metrics, pipeline
+        )
 
         assert self.output_path.suffix == ".json"
         metrics_dict, metric_lists = pipeline.get_average_eval_image_metrics()

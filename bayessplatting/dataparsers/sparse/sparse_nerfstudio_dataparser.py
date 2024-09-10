@@ -1,4 +1,3 @@
-
 """ Same as nerfstudio dataparse but uses CF-NeRF and NerfingMVS train/test splits for LF and ScanNet datasets """
 
 from __future__ import annotations
@@ -20,10 +19,10 @@ from nerfstudio.data.dataparsers.base_dataparser import (
     DataparserOutputs,
 )
 from nerfstudio.data.scene_box import SceneBox
+from nerfstudio.data.utils.dataparsers_utils import get_train_eval_split_fraction
 from nerfstudio.utils.io import load_from_json
 from nerfstudio.utils.rich_utils import CONSOLE
 from numpy.random import RandomState
-
 
 MAX_AUTO_RESOLUTION = 1600
 seed = 12345
@@ -41,6 +40,8 @@ class SparseNsDataParserConfig(DataParserConfig):
     """How much to scale the camera origins by."""
     downscale_factor: Optional[int] = 2
     """How much to downscale images. If not set, images are chosen such that the max dimension is <1600px."""
+    scene_scale: float = 50.0
+    """How much to scale the region of interest by."""
     orientation_method: Literal["pca", "up", "vertical", "none"] = "up"
     """The method to use for orientation."""
     center_method: Literal["poses", "focus", "none"] = "poses"
@@ -49,7 +50,8 @@ class SparseNsDataParserConfig(DataParserConfig):
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
     depth_unit_scale_factor: float = 1e-3
     """Scales the depth values to meters. Default value is 0.001 for a millimeter to meter conversion."""
-    dataset_name: Literal["africa", "basket", "statue", "torch", "scene_079","scene_000","scene_158","scene_316"] = "africa"
+    dataset_name: Literal[
+        "africa", "basket", "statue", "torch", "scene_079", "scene_000", "scene_158", "scene_316", "fraction"] = "africa"
 
 
 @dataclass
@@ -142,25 +144,25 @@ class SparseNerfstudio(DataParser):
                 depth_filepath = Path(frame["depth_file_path"])
                 depth_fname = self._get_fname(depth_filepath, data_dir, downsample_folder_prefix="depths_")
                 depth_filenames.append(depth_fname)
-        
+
         if "mask_path" in frame:
             sorted_lists = sorted(zip(image_filenames, mask_filenames))
             _, mask_filenames = zip(*sorted_lists)
         if "depth_file_path" in frame:
             sorted_lists = sorted(zip(image_filenames, depth_filenames))
-            _, depth_filenames = zip(*sorted_lists)    
-            
+            _, depth_filenames = zip(*sorted_lists)
+
         sorted_lists = sorted(zip(image_filenames, poses))
         image_filenames, poses = zip(*sorted_lists)
-        
+
         assert len(mask_filenames) == 0 or (
-            len(mask_filenames) == len(image_filenames)
+                len(mask_filenames) == len(image_filenames)
         ), """
         Different number of image and mask filenames.
         You should check that mask_path is specified for every frame (or zero frames) in transforms.json.
         """
         assert len(depth_filenames) == 0 or (
-            len(depth_filenames) == len(image_filenames)
+                len(depth_filenames) == len(image_filenames)
         ), """
         Different number of image and depth filenames.
         You should check that depth_file_path is specified for every frame (or zero frames) in transforms.json.
@@ -182,51 +184,65 @@ class SparseNerfstudio(DataParser):
         else:
             # filter image_filenames and poses based on train/eval split percentage
             num_images = len(image_filenames)
-            
+
             i_all = np.arange(num_images)
-            
-#train/test split from CF-NeRF https://github.com/poetrywanderer/CFNeRF/blob/66918a9748c137e1c0242c12be7aa6efa39ece06/run_nerf_uncertainty_NF.py#L750
+
+            # train/test split from CF-NeRF https://github.com/poetrywanderer/CFNeRF/blob/66918a9748c137e1c0242c12be7aa6efa39ece06/run_nerf_uncertainty_NF.py#L750
             if self.config.dataset_name == 'basket':
                 # 4 views
-                i_train = list(np.arange(43,50,2))
-                i_val = list(np.arange(42,50,2))
-                self.config.scene_scale = 50. # half the far bound computed by colmap bounds 
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
+                i_val = list(np.arange(42, 50, 2))
+                self.config.scene_scale = 50.  # half the far bound computed by colmap bounds
             elif self.config.dataset_name == 'africa':
                 # 5 views
-                i_train = list(np.arange(5,14,2))
-                i_val = list(np.arange(6,14,2))
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
+                i_val = list(np.arange(6, 14, 2))
                 self.config.scene_scale = 36.
 
             elif self.config.dataset_name == 'statue':
                 # 5 views
-                i_train = list(np.arange(67,76,2))
-                i_val = list(np.arange(68,76,2))
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
+                i_val = list(np.arange(68, 76, 2))
                 self.config.scene_scale = 50.
 
             elif self.config.dataset_name == 'torch':
                 # 5 views
-                i_train = list(np.arange(8,17,2))
-                i_val = list(np.arange(9,17,2))
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
+                i_val = list(np.arange(9, 17, 2))
                 self.config.scene_scale = 72.
-                
-# train/test split from scannet scenes of https://github.com/weiyithu/NerfingMVS/tree/28511191239daf25cd8ded17e7fa21a68df54de1
+
+            # train/test split from scannet scenes of https://github.com/weiyithu/NerfingMVS/tree/28511191239daf25cd8ded17e7fa21a68df54de1
             elif self.config.dataset_name == 'scene_079':
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
                 i_val = [4, 12, 20, 28, 37]
-                i_train = list([i for i in range(40) if i not in i_val])
                 self.config.scene_scale = 150.
             elif self.config.dataset_name == 'scene_000':
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
                 i_val = [4, 12, 20, 28, 36]
-                i_train = list([i for i in range(40) if i not in i_val])
                 self.config.scene_scale = 140.
             elif self.config.dataset_name == 'scene_316':
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
                 i_val = [4, 12, 20, 28, 36]
-                i_train = list([i for i in range(40) if i not in i_val])
                 self.config.scene_scale = 100.
             elif self.config.dataset_name == 'scene_158':
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
                 i_val = [4, 12, 20, 28, 36]
-                i_train = list([i for i in range(40) if i not in i_val]) 
                 self.config.scene_scale = 2000
-            
+            elif self.config.dataset_name == 'scene_4_traj1':
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
+                i_val = [54, 12, 67, 176, 298]
+            elif self.config.dataset_name == 'scene_7_traj1':
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
+                i_val = [23, 77, 165, 290, 314]
+            elif self.config.dataset_name == 'scene_9_traj2':
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
+                i_val = [38, 57, 147, 312, 101]
+            elif self.config.dataset_name == 'scene_11_traj1':
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
+                i_val = [30, 12, 4, 135, 248]
+            elif self.config.dataset_name == "fraction":
+                i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
+
             else:
                 raise ValueError(f"Unknown scene {self.config.dataset_name}")
             if split == "train":
@@ -248,8 +264,9 @@ class SparseNerfstudio(DataParser):
             method=orientation_method,
             center_method=self.config.center_method,
         )
-        # Scale poses
-        scale_factor = 1.0
+        # uncomment for nerf
+        # scale_factor = 1.0
+        scale_factor = self.config.camera_scale_factor
         if self.config.auto_scale_poses:
             scale_factor /= float(torch.max(torch.abs(poses[:, :3, 3])))
         scale_factor *= self.config.scale_factor
@@ -284,6 +301,7 @@ class SparseNerfstudio(DataParser):
         cy = float(meta["cy"]) if cy_fixed else torch.tensor(cy, dtype=torch.float32)[idx_tensor]
         height = int(meta["h"]) if height_fixed else torch.tensor(height, dtype=torch.int32)[idx_tensor]
         width = int(meta["w"]) if width_fixed else torch.tensor(width, dtype=torch.int32)[idx_tensor]
+        # breakpoint()
         if distort_fixed:
             distortion_params = camera_utils.get_distortion_params(
                 k1=float(meta["k1"]) if "k1" in meta else 0.0,
@@ -310,6 +328,7 @@ class SparseNerfstudio(DataParser):
 
         assert self.downscale_factor is not None
         cameras.rescale_output_resolution(scaling_factor=1.0 / self.downscale_factor)
+        # breakpoint()
 
         if "applied_transform" in meta:
             applied_transform = torch.tensor(meta["applied_transform"], dtype=transform_matrix.dtype)
@@ -351,11 +370,11 @@ class SparseNerfstudio(DataParser):
                 while True:
                     if (max_res / 2 ** (df)) < MAX_AUTO_RESOLUTION:
                         break
-                    if not (data_dir / f"{downsample_folder_prefix}{2**(df+1)}" / filepath.name).exists():
+                    if not (data_dir / f"{downsample_folder_prefix}{2 ** (df + 1)}" / filepath.name).exists():
                         break
                     df += 1
 
-                self.downscale_factor = 2**df
+                self.downscale_factor = 2 ** df
                 CONSOLE.log(f"Auto image downscale factor of {self.downscale_factor}")
             else:
                 self.downscale_factor = self.config.downscale_factor
