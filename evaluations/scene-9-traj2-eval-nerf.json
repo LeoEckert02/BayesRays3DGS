@@ -1,0 +1,16 @@
+{
+  "experiment_name": "scene_9_tra2",
+  "method_name": "nerfacto",
+  "checkpoint": "outputs/scene_9_tra2/nerfacto/main/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 31.945903778076172,
+    "ssim": 0.9363834261894226,
+    "lpips": 0.1562003195285797,
+    "ause_mse": 0.5122999548912048,
+    "ause_mae": 0.372326523065567,
+    "ause_rmse": 0.45616811513900757,
+    "mse": 0.010990513488650322,
+    "num_rays_per_sec": 150616.4375,
+    "fps": 0.3901495039463043
+  }
+}
