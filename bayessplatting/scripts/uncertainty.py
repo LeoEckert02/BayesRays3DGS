@@ -12,6 +12,7 @@ from gsplat.rasterize import rasterize_gaussians
 from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.field_components.encodings import HashEncoding
 from nerfstudio.model_components import renderers
+from nerfstudio.models.splatfacto import SplatfactoModel
 from nerfstudio.utils.eval_utils import eval_setup
 
 from bayessplatting.utils.utils import (find_grid_indices,
@@ -126,6 +127,10 @@ class ComputeUncertainty:
         self.deform_field_quats.scalings = torch.tensor([2 ** self.lod]).to(self.device)
 
         pipeline.eval()
+
+        if not isinstance(pipeline.model, SplatfactoModel):
+            raise Exception("Sorry, this model is not currently supported.")
+
         len_train = max(pipeline.datamanager.train_dataset.__len__(), self.iters)
         for step in range(len_train):
             print("step", step)
