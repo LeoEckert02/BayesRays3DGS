@@ -31,47 +31,25 @@ class ComputeUncertainty:
     # number of iterations on the trainset
     iters: int = 1000
     # deform covariance matrix
-    deform_cov: bool = True
+    deform_cov: bool = False
 
-    def find_uncertainty(self, points, deform_points_1, rgb, deform_points_2=None):
+    def find_uncertainty(self, points, deform_points_1, rgb):
         inds, coeffs = find_grid_indices(points, self.lod, self.device)
-        # breakpoint()
         # because deformation params are detached for each point on each ray from the grid, summation does not affect derivative
         colors = torch.sum(rgb, dim=0)
         colors[0].backward(retain_graph=True)
-        # breakpoint()
-        r1 = deform_points_1.grad.clone().detach().view(-1, 3)
-        if deform_points_2 is not None:
-            r2 = deform_points_2.grad.clone().detach().view(-1, 4)
+        r = deform_points_1.grad.clone().detach().view(-1, 3)
 
-        deform_points_2.grad.zero_()
+        deform_points_1.grad.zero_()
         colors[1].backward(retain_graph=True)
-        g1 = deform_points_1.grad.clone().detach().view(-1, 3)
-        if deform_points_2 is not None:
-            g2 = deform_points_2.grad.clone().detach().view(-1, 4)
+        g = deform_points_1.grad.clone().detach().view(-1, 3)
 
-        deform_points_2.grad.zero_()
+        deform_points_1.grad.zero_()
         colors[2].backward()
-        b1 = deform_points_1.grad.clone().detach().view(-1, 3)
-        if deform_points_2 is not None:
-            b2 = deform_points_2.grad.clone().detach().view(-1, 4)
+        b = deform_points_1.grad.clone().detach().view(-1, 3)
 
-        if deform_points_2 is not None:
+        deform_points_1.grad.zero_()
 
-            # padding gradient
-            r1 = torch.cat([r1, torch.zeros(r1.shape[0], 1, device=r1.device)], dim=1)
-            g1 = torch.cat([g1, torch.zeros(g1.shape[0], 1, device=r1.device)], dim=1)
-            b1 = torch.cat([b1, torch.zeros(b1.shape[0], 1, device=r1.device)], dim=1)
-
-            r = r1 + r2
-            g = g1 + g2
-            b = b1 + b2
-        else:
-            r = r1
-            g = g1
-            b = b1
-
-        deform_points_2.grad.zero_()
         dmy = torch.arange(inds.shape[1], device=self.device)
         first = True
         for corner in range(8):
@@ -82,7 +60,8 @@ class ComputeUncertainty:
                 all_b = coeffs[corner].unsqueeze(-1) * b
                 first = False
             else:
-                all_ind = torch.cat((all_ind, torch.cat((dmy.unsqueeze(-1), inds[corner].unsqueeze(-1)), dim=-1)),dim=0)
+                all_ind = torch.cat((all_ind, torch.cat((dmy.unsqueeze(-1), inds[corner].unsqueeze(-1)), dim=-1)),
+                                    dim=0)
                 all_r = torch.cat((all_r, coeffs[corner].unsqueeze(-1) * r), dim=0)
                 all_g = torch.cat((all_g, coeffs[corner].unsqueeze(-1) * g), dim=0)
                 all_b = torch.cat((all_b, coeffs[corner].unsqueeze(-1) * b), dim=0)
@@ -106,7 +85,6 @@ class ComputeUncertainty:
 
         hessian = torch.zeros(((2 ** self.lod) + 1) ** 3).to(self.device)
         hessian = hessian.put((grads_all[:, 0]).long(), grads_all[:, 1], True)
-
 
         return hessian
 
@@ -134,31 +112,26 @@ class ComputeUncertainty:
                                              implementation="torch",
                                              interpolation="Linear")
         self.deform_field_quats = HashEncoding(num_levels=1,
-                                             min_res=2 ** self.lod,
-                                             max_res=2 ** self.lod,
-                                             log2_hashmap_size=self.lod * 3 + 1,
-                                             # simple regular grid (hash table size > grid size)
-                                             features_per_level=4,
-                                             hash_init_scale=0.,
-                                             implementation="torch",
-                                             interpolation="Linear")
+                                               min_res=2 ** self.lod,
+                                               max_res=2 ** self.lod,
+                                               log2_hashmap_size=self.lod * 3 + 1,
+                                               # simple regular grid (hash table size > grid size)
+                                               features_per_level=4,
+                                               hash_init_scale=0.,
+                                               implementation="torch",
+                                               interpolation="Linear")
         self.deform_field_pos.to(self.device)
         self.deform_field_pos.scalings = torch.tensor([2 ** self.lod]).to(self.device)
         self.deform_field_quats.to(self.device)
         self.deform_field_quats.scalings = torch.tensor([2 ** self.lod]).to(self.device)
-
-        # breakpoint()
 
         pipeline.eval()
         len_train = max(pipeline.datamanager.train_dataset.__len__(), self.iters)
         for step in range(len_train):
             print("step", step)
             camera, _ = pipeline.datamanager.next_train(step)
-            # breakpoint()
-            # breakpoint()
-            outputs, points, offsets_1, offsets_2 = self.get_outputs(camera, pipeline.model)
-            # breakpoint()
-            hessian = self.find_uncertainty(points, offsets_1, outputs['rgb'].view(-1, 3), offsets_2)
+            outputs, points, offsets_1 = self.get_outputs(camera, pipeline.model)
+            hessian = self.find_uncertainty(points, offsets_1, outputs['rgb'].view(-1, 3))
             self.hessian += hessian.clone().detach()
 
         end_time = time.time()
@@ -166,7 +139,6 @@ class ComputeUncertainty:
         with open(str(self.output_path), 'wb') as f:
             np.save(f, self.hessian.cpu().numpy())
         execution_time = end_time - start_time
-        # breakpoint()
         print(f"Execution time: {execution_time:.6f} seconds")
 
     def get_outputs(self, camera: Cameras, model):
@@ -243,24 +215,14 @@ class ComputeUncertainty:
             normalized_points = normalize_point_coords(means_crop)
             offsets_1 = self.deform_field_pos(normalized_points).clone().detach()
             offsets_1.requires_grad = True
-            offsets_2 = None
 
             means_crop = means_crop + offsets_1
         else:
-            normalized_points_scales = normalize_point_coords(means_crop)
-            offsets_1 = self.deform_field_pos(normalized_points_scales).clone().detach()
+            normalized_points_quats = normalize_point_coords(means_crop)
+            offsets_1 = self.deform_field_quats(normalized_points_quats).clone().detach()
             offsets_1.requires_grad = True
 
-            # breakpoint()
-
-            normalized_points_quats = normalize_point_coords(means_crop)
-            offsets_2 = self.deform_field_quats(normalized_points_quats).clone().detach()
-            offsets_2.requires_grad = True
-
-            scales_crop = scales_crop + offsets_1
-            quats_crop = quats_crop + offsets_2
-
-
+            quats_crop = quats_crop + offsets_1
 
         colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
         BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
@@ -278,9 +240,6 @@ class ComputeUncertainty:
             W,
             BLOCK_WIDTH,
         )  # type: ignore
-
-
-        # breakpoint()
 
         # rescale the camera back to original dimensions before returning
         camera.rescale_output_resolution(camera_downscale)
@@ -347,7 +306,7 @@ class ComputeUncertainty:
         }
 
         # means_crop are xyz points of gaussian splat
-        return outputs, means_crop, offsets_1, offsets_2
+        return outputs, means_crop, offsets_1
 
     def get_downscale_factor(self, model):
         if model.training:

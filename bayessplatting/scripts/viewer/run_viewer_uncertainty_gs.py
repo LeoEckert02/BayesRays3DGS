@@ -30,10 +30,9 @@ import numpy as np
 import torch
 import tyro
 from gsplat import spherical_harmonics
-from gsplat.rasterize import rasterize_gaussians
 from gsplat.project_gaussians import project_gaussians
+from gsplat.rasterize import rasterize_gaussians
 from nerfstudio.cameras.cameras import Cameras
-
 from nerfstudio.configs.base_config import ViewerConfig
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.model_components import renderers
@@ -55,7 +54,9 @@ def get_outputs(self, camera: Cameras):
 
     # get the background color
     if self.training:
-        optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[0, ...]
+        optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)[
+            0, ...
+        ]
 
         if self.config.background_color == "random":
             background = torch.rand(3, device=self.device)
@@ -74,17 +75,21 @@ def get_outputs(self, camera: Cameras):
             background = self.background_color.to(self.device)
 
     N = self.N
-    reg_lambda = 1e-4 / ((2 ** self.lod) ** 3)
+    reg_lambda = 1e-4 / ((2**self.lod) ** 3)
     H = self.hessian / N + reg_lambda
     self.un = 1 / H
 
     max_uncertainty = 6  # approximate upper bound of the function log10(1/(x+lambda)) when lambda=1e-4/(256^3) and x is the hessian
-    min_uncertainty = -3  # approximate lower bound of that function (cutting off at hessian = 1000)
+    min_uncertainty = (
+        -3
+    )  # approximate lower bound of that function (cutting off at hessian = 1000)
 
     if self.crop_box is not None and not self.training:
         crop_ids = self.crop_box.within(self.means).squeeze()
         if crop_ids.sum() == 0:
-            return self.get_empty_outputs(int(camera.width.item()), int(camera.height.item()), background)
+            return self.get_empty_outputs(
+                int(camera.width.item()), int(camera.height.item()), background
+            )
     else:
         crop_ids = None
     camera_downscale = self._get_downscale_factor()
@@ -142,7 +147,9 @@ def get_outputs(self, camera: Cameras):
     un_points = un_points[valid_indices]
 
     colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
-    BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
+    BLOCK_WIDTH = (
+        16  # this controls the tile size of rasterization, 16 is a good default
+    )
     self.xys, depths, self.radii, conics, comp, num_tiles_hit, cov3d = project_gaussians(  # type: ignore
         means_crop,
         torch.exp(scales_crop),
@@ -165,9 +172,13 @@ def get_outputs(self, camera: Cameras):
         return self.get_empty_outputs(W, H, background)
 
     if self.config.sh_degree > 0:
-        viewdirs = means_crop.detach() - optimized_camera_to_world.detach()[:3, 3]  # (N, 3)
+        viewdirs = (
+            means_crop.detach() - optimized_camera_to_world.detach()[:3, 3]
+        )  # (N, 3)
         n = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
-        rgbs = spherical_harmonics(n, viewdirs, colors_crop)  # input unnormalized viewdirs
+        rgbs = spherical_harmonics(
+            n, viewdirs, colors_crop
+        )  # input unnormalized viewdirs
         rgbs = torch.clamp(rgbs + 0.5, min=0.0)  # type: ignore
     else:
         rgbs = torch.sigmoid(colors_crop[:, 0, :])
@@ -201,12 +212,6 @@ def get_outputs(self, camera: Cameras):
     depth_im = None
     uncertainty_im = None
 
-    # #normalize into acceptable range for rendering
-    # uncertainty = torch.clip(uncertainty, min_uncertainty, max_uncertainty)
-    # uncertainty = (uncertainty-min_uncertainty)/(max_uncertainty-min_uncertainty)
-
-    # breakpoint()
-
     if self.config.output_depth_during_training or not self.training:
         depth_im = rasterize_gaussians(  # type: ignore
             self.xys,
@@ -220,7 +225,9 @@ def get_outputs(self, camera: Cameras):
             W,
             BLOCK_WIDTH,
             background=torch.zeros(3, device=self.device),
-        )[..., 0:1]  # type: ignore
+        )[
+            ..., 0:1
+        ]  # type: ignore
         uncertainty_im = rasterize_gaussians(  # type: ignore
             self.xys,
             depths,
@@ -233,16 +240,24 @@ def get_outputs(self, camera: Cameras):
             W,
             BLOCK_WIDTH,
             background=torch.zeros(3, device=self.device),
-        )[..., 0:1]  # type: ignore
+        )[
+            ..., 0:1
+        ]  # type: ignore
         depth_im = torch.where(alpha > 0, depth_im / alpha, depth_im.detach().max())
-        # breakpoint()
         nan_tensor = torch.full_like(uncertainty_im, -4)
         uncertainty_im = torch.where(alpha > 0, uncertainty_im / alpha, nan_tensor)
         uncertainty_im = torch.clip(uncertainty_im, min_uncertainty, max_uncertainty)
-        uncertainty_im = (uncertainty_im - min_uncertainty) / (max_uncertainty - min_uncertainty)
+        uncertainty_im = (uncertainty_im - min_uncertainty) / (
+            max_uncertainty - min_uncertainty
+        )
 
-    return {"rgb": rgb, "depth": depth_im, "accumulation": alpha, "uncertainty": uncertainty_im,
-            "background": background}  # type: ignore
+    return {
+        "rgb": rgb,
+        "depth": depth_im,
+        "accumulation": alpha,
+        "uncertainty": uncertainty_im,
+        "background": background,
+    }  # type: ignore
 
 
 @dataclass
@@ -262,7 +277,9 @@ class RunViewer:
 
     load_config: Path
     """Path to config YAML file."""
-    viewer: ViewerConfigWithoutNumRays = field(default_factory=ViewerConfigWithoutNumRays)
+    viewer: ViewerConfigWithoutNumRays = field(
+        default_factory=ViewerConfigWithoutNumRays
+    )
     """Viewer configuration"""
     vis: Literal["viewer", "viewer_legacy"] = "viewer"
     """Type of viewer"""
@@ -287,11 +304,19 @@ class RunViewer:
         config.viewer.num_rays_per_chunk = num_rays_per_chunk
 
         self.device = pipeline.device
-        pipeline.model.filter_thresh = 1.
-        pipeline.model.hessian = torch.tensor(np.load(str(self.unc_path)), device=self.device)
-        pipeline.model.N = 1000*1920*1080  # approx ray dataset size (train batch size x number of query iterations in uncertainty extraction step)
-        pipeline.model.lod = np.log2(round(pipeline.model.hessian.shape[0] ** (1 / 3)) - 1)
-        pipeline.model.get_uncertainty = types.MethodType(get_uncertainty, pipeline.model)
+        pipeline.model.filter_thresh = 1.0
+        pipeline.model.hessian = torch.tensor(
+            np.load(str(self.unc_path)), device=self.device
+        )
+        pipeline.model.N = (
+            1000 * 1280 * 720
+        )  # approx ray dataset size (train batch size x number of query iterations in uncertainty extraction step)
+        pipeline.model.lod = np.log2(
+            round(pipeline.model.hessian.shape[0] ** (1 / 3)) - 1
+        )
+        pipeline.model.get_uncertainty = types.MethodType(
+            get_uncertainty, pipeline.model
+        )
         pipeline.model.white_bg = self.white_bg
         pipeline.model.black_bg = self.black_bg
         pipeline.model.get_outputs = types.MethodType(get_outputs, pipeline.model)
@@ -343,7 +368,7 @@ def _start_viewer(config: TrainerConfig, pipeline: Pipeline, step: int):
 
         viewer_state.control_panel._filter = ViewerSlider(
             "Filter Threshold",
-            default_value=1.,
+            default_value=1.0,
             min_value=0.0,
             max_value=1,
             step=0.01,
@@ -355,7 +380,11 @@ def _start_viewer(config: TrainerConfig, pipeline: Pipeline, step: int):
 
     # We don't need logging, but writer.GLOBAL_BUFFER needs to be populated
     config.logging.local_writer.enable = False
-    writer.setup_local_writer(config.logging, max_iter=config.max_num_iterations, banner_messages=banner_messages)
+    writer.setup_local_writer(
+        config.logging,
+        max_iter=config.max_num_iterations,
+        banner_messages=banner_messages,
+    )
 
     assert viewer_state and pipeline.datamanager.train_dataset
     viewer_state.init_scene(
@@ -370,7 +399,6 @@ def _start_viewer(config: TrainerConfig, pipeline: Pipeline, step: int):
         time.sleep(0.01)
 
 
-
 def entrypoint():
     """Entrypoint for use with pyproject scripts."""
     tyro.extras.set_accent_color("bright_yellow")
@@ -381,4 +409,6 @@ if __name__ == "__main__":
     entrypoint()
 
 # For sphinx docs
-get_parser_fn = lambda: tyro.extras.get_parser(tyro.conf.FlagConversionOff[RunViewer])  # noqa
+get_parser_fn = lambda: tyro.extras.get_parser(
+    tyro.conf.FlagConversionOff[RunViewer]
+)  # noqa

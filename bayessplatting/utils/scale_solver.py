@@ -161,7 +161,7 @@ def read_gt_depth(base_dir, xys):
 
 def main(args):
     print(args)
-    base_dir = Path('/Users/new-mac/Documents/Bachelor-Thesis/BayesRays3DGS/resources/data/nerfstudio/scene_079')
+    base_dir = Path('/Users/new-mac/Documents/Bachelor-Thesis/BayesRays3DGS/resources/data/nerfstudio/scene_11_traj1-sparse')
     colmap_dir = base_dir / Path('colmap/sparse/0')
     _, points = read_points_bin(colmap_dir)
     images = read_images_bin(colmap_dir)
@@ -212,16 +212,16 @@ if __name__ == '__main__':
     args = parser.parse_args()
     #
     # if args.dataset == 'scannet':
-    #     i_val = [4, 12, 20, 28, 36]
+    # i_val = [4, 12, 20, 28, 36]
     # elif args.dataset == 'LF':
     #     if args.scene == 'basket':
     #         i_val = list(np.arange(42, 50, 2))
     #     elif args.scene == 'africa':
-    #         i_val = list(np.arange(6, 14, 2))
+    # i_val = list(np.arange(6, 14, 2))
     #     elif args.scene == "torch":
     #         i_val = list(np.arange(9, 17, 2))
     #     elif args.scene == "statue":
-    #         i_val = list(np.arange(68, 76, 2))
+    i_val = [15, 6, 2, 68, 125]
     # elif args.dataset == 'hammer':
     #     if args.scene == 'scene_4':
     #         i_val = [54, 12, 67, 176, 298]

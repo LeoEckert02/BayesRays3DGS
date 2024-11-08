@@ -1,17 +1,15 @@
 import torch
 from gsplat import spherical_harmonics
+from gsplat.project_gaussians import project_gaussians
+from gsplat.rasterize import rasterize_gaussians
 from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.model_components import renderers
 
 from bayessplatting.utils.utils import find_grid_indices
-from gsplat.project_gaussians import project_gaussians
-from gsplat.rasterize import rasterize_gaussians
 
 
 def get_uncertainty(self, points):
-    aabb = self.scene_box.aabb.to(points.device)
-    # samples outside aabb will have 0 coeff and hence 0 uncertainty. To avoid problems with these samples we set
-    # zero_out=False
+    self.scene_box.aabb.to(points.device)
     inds, coeffs = find_grid_indices(points, self.lod, points.device)
     cfs_2 = (coeffs ** 2) / torch.sum((coeffs ** 2), dim=0, keepdim=True)
     uns = self.un[inds.long()]  # [8,N]
@@ -19,11 +17,10 @@ def get_uncertainty(self, points):
 
     # for stability in volume rendering we use log uncertainty
     un_points = torch.log10(un_points + 1e-12)
-    # un_points = un_points.view((points.shape[0], points.shape[1], 1))
     return un_points
 
 
-def get_outputs(self, camera: Cameras):
+def get_outputs(self, camera: Cameras, filter_out: bool = False):
     if not isinstance(camera, Cameras):
         print("Called get_outputs with not a camera")
         return {}
@@ -64,7 +61,7 @@ def get_outputs(self, camera: Cameras):
     else:
         crop_ids = None
     camera_downscale = self._get_downscale_factor()
-    camera.rescale_output_resolution(1 / camera_downscale)
+    camera.rescale_output_resolution(1 / camera_downscale, "ceil")
     # shift the camera to center of scene looking at center
     R = optimized_camera_to_world[:3, :3]  # 3 x 3
     T = optimized_camera_to_world[:3, 3:4]  # 3 x 1
@@ -108,14 +105,17 @@ def get_outputs(self, camera: Cameras):
     un_points_cp = (un_points - un_points_min) / (un_points_max - un_points_min)
 
     # Filter out Gaussians with uncertainty greater than the threshold
-    valid_indices = un_points_cp <= self.filter_thresh
-    opacities_crop = opacities_crop[valid_indices]
-    means_crop = means_crop[valid_indices]
-    features_dc_crop = features_dc_crop[valid_indices]
-    features_rest_crop = features_rest_crop[valid_indices]
-    scales_crop = scales_crop[valid_indices]
-    quats_crop = quats_crop[valid_indices]
-    un_points = un_points[valid_indices]
+    if filter_out:
+        valid_indices = un_points_cp <= self.filter_thresh
+        opacities_crop = opacities_crop[valid_indices]
+        means_crop = means_crop[valid_indices]
+        features_dc_crop = features_dc_crop[valid_indices]
+        features_rest_crop = features_rest_crop[valid_indices]
+        scales_crop = scales_crop[valid_indices]
+        quats_crop = quats_crop[valid_indices]
+        un_points = un_points[valid_indices]
+
+    # breakpoint()
 
     colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
     BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
@@ -135,7 +135,7 @@ def get_outputs(self, camera: Cameras):
     )  # type: ignore
 
     # rescale the camera back to original dimensions before returning
-    camera.rescale_output_resolution(camera_downscale)
+    camera.rescale_output_resolution(camera_downscale, "ceil")
 
     if (self.radii).sum() == 0:
         return self.get_empty_outputs(W, H, background)
@@ -176,12 +176,6 @@ def get_outputs(self, camera: Cameras):
     rgb = torch.clamp(rgb, max=1.0)  # type: ignore
     depth_im = None
     uncertainty_im = None
-
-    # #normalize into acceptable range for rendering
-    # uncertainty = torch.clip(uncertainty, min_uncertainty, max_uncertainty)
-    # uncertainty = (uncertainty-min_uncertainty)/(max_uncertainty-min_uncertainty)
-
-    # breakpoint()
 
     if self.config.output_depth_during_training or not self.training:
         depth_im = rasterize_gaussians(  # type: ignore

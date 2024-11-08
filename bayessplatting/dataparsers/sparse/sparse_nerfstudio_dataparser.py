@@ -22,7 +22,6 @@ from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.data.utils.dataparsers_utils import get_train_eval_split_fraction
 from nerfstudio.utils.io import load_from_json
 from nerfstudio.utils.rich_utils import CONSOLE
-from numpy.random import RandomState
 
 MAX_AUTO_RESOLUTION = 1600
 seed = 12345
@@ -185,61 +184,71 @@ class SparseNerfstudio(DataParser):
             # filter image_filenames and poses based on train/eval split percentage
             num_images = len(image_filenames)
 
-            i_all = np.arange(num_images)
-
             # train/test split from CF-NeRF https://github.com/poetrywanderer/CFNeRF/blob/66918a9748c137e1c0242c12be7aa6efa39ece06/run_nerf_uncertainty_NF.py#L750
             if self.config.dataset_name == 'basket':
                 # 4 views
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
-                i_val = list(np.arange(42, 50, 2))
+                i_val = [21, 22, 23, 24]
+                # i_val = list(np.arange(42, 50, 2))
                 self.config.scene_scale = 50.  # half the far bound computed by colmap bounds
             elif self.config.dataset_name == 'africa':
                 # 5 views
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
                 i_val = list(np.arange(6, 14, 2))
+                # i_val = [3, 4, 5, 6]
                 self.config.scene_scale = 36.
 
             elif self.config.dataset_name == 'statue':
                 # 5 views
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
-                i_val = list(np.arange(68, 76, 2))
+                i_val = [34, 35, 36, 37]
+                # i_val = list(np.arange(68, 76, 2))
                 self.config.scene_scale = 50.
 
             elif self.config.dataset_name == 'torch':
                 # 5 views
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
                 i_val = list(np.arange(9, 17, 2))
+                # i_val = [5, 7, 9, 11]
                 self.config.scene_scale = 72.
 
             # train/test split from scannet scenes of https://github.com/weiyithu/NerfingMVS/tree/28511191239daf25cd8ded17e7fa21a68df54de1
             elif self.config.dataset_name == 'scene_079':
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
                 i_val = [4, 12, 20, 28, 37]
+                # i_val = [2, 6, 10, 14, 18]
                 self.config.scene_scale = 150.
             elif self.config.dataset_name == 'scene_000':
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
-                i_val = [4, 12, 20, 28, 36]
+                i_val = [4, 12, 20, 28, 37]
+                # i_val = [2, 6, 10, 14, 18]
                 self.config.scene_scale = 140.
             elif self.config.dataset_name == 'scene_316':
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
-                i_val = [4, 12, 20, 28, 36]
+                # i_val = [4, 12, 20, 28, 37]
+                i_val = [2, 6, 10, 14, 18]
                 self.config.scene_scale = 100.
             elif self.config.dataset_name == 'scene_158':
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
-                i_val = [4, 12, 20, 28, 36]
+                i_val = [4, 12, 20, 28, 37]
+                # i_val = [2, 6, 10, 14, 18]
                 self.config.scene_scale = 2000
             elif self.config.dataset_name == 'scene_4_traj1':
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
-                i_val = [54, 12, 67, 176, 298]
+                # i_val = [54, 12, 67, 176, 298]
+                i_val = [27, 6, 34, 89, 150]
             elif self.config.dataset_name == 'scene_7_traj1':
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
-                i_val = [23, 77, 165, 290, 314]
+                # i_val = [23, 77, 165, 290, 314]
+                i_val = [12, 40, 85, 148, 160]
             elif self.config.dataset_name == 'scene_9_traj2':
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
                 i_val = [38, 57, 147, 312, 101]
+                # i_val = [19, 29, 76, 159, 52]
             elif self.config.dataset_name == 'scene_11_traj1':
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
-                i_val = [30, 12, 4, 135, 248]
+                # i_val = [30, 12, 4, 135, 248]
+                i_val = [15, 6, 2, 68, 125]
             elif self.config.dataset_name == "fraction":
                 i_train, i_val = get_train_eval_split_fraction(image_filenames, 0.9)
 

@@ -81,7 +81,7 @@ def replace_dataparser(yml_file_path, output_file_path, camera_scale_factor):
       auto_scale_poses: false
       center_method: poses
       data: !!python/object/apply:pathlib.PosixPath [ ]
-      dataset_name: statue
+      dataset_name: scene_9_traj2
       depth_unit_scale_factor: 0.001
       downscale_factor: 2
       orientation_method: up
@@ -111,14 +111,31 @@ def replace_dataparser(yml_file_path, output_file_path, camera_scale_factor):
 
 def plot_errors(
     ratio_removed, ause_err, ause_err_by_var, err_type, scene_no, output_path
-):  # AUSE plots, with oracle curve also visible
+):
+    # AUSE plots, with oracle curve also visible
     plt.plot(ratio_removed, ause_err, "--")
     plt.plot(ratio_removed, ause_err_by_var, "-r")
-    plt.plot(ratio_removed, ause_err_by_var - ause_err, '-g') # uncomment for getting plots similar to the paper, without visible oracle curve
+    difference_err = ause_err_by_var - ause_err
+    plt.plot(ratio_removed, difference_err, '-g')  # Plotting difference curve
+
+    print(difference_err)
+
+    # Save the plot
     path = output_path.parent / Path("plots")
     path.mkdir(parents=True, exist_ok=True)
     plt.savefig(path / Path("plot_" + err_type + "_" + str(scene_no) + ".png"))
     plt.figure()
+
+    # Write the difference_err values to a text file for LaTeX plotting
+    with open(path / Path(f"plot_data_diff_{err_type}_{scene_no}.txt"), "w") as f:
+        # Write data in LaTeX-friendly format
+        f.write("% Difference (ause_err_by_var - ause_err) values for LaTeX plotting\n")
+        f.write("\\addplot coordinates {\n")
+        for i, ratio in enumerate(ratio_removed):
+            f.write(f"({ratio},{difference_err[i]})\n")
+        f.write("};\n")
+
+
 
 
 def visualize_ranks(unc, gt, colormap="jet"):
@@ -340,10 +357,8 @@ def get_average_uncertainty_metrics(self, step: Optional[int] = None):
 
         for camera, batch in self.datamanager.fixed_indices_eval_dataloader:
 
-            # breakpoint()
             # time this the following line
             inner_start = time()
-            # breakpoint()
             camera.height = camera.height + 1
             camera.width = camera.width + 1
             height, width = camera.height, camera.width

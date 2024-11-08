@@ -16,7 +16,7 @@ include = ["bayessplatting*"]
 sparse-nerfstudio = 'bayessplatting.dataparsers.sparse.sparse_nerfstudio_config:sparseNsDataparser'
 
 [project.scripts]
-ns-uncertainty = "bayessplatting.scripts.uncertainty:entrypoint"
+ns-uncertainty-gs = "bayessplatting.scripts.uncertainty:entrypoint"
 ns-viewer-ugs = "bayessplatting.scripts.viewer.run_viewer_uncertainty_gs:entrypoint"
 ns-render-ugs = "bayessplatting.scripts.render_uncertainty:entrypoint"
 ns-eval-ugs = "bayessplatting.scripts.eval_uncertainty:entrypoint"
